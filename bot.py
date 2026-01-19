@@ -2,7 +2,6 @@ import os
 import sys
 import json
 import logging
-import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -162,8 +161,8 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-# === Главная асинхронная функция ===
-async def main():
+# === Запуск бота (СИНХРОННЫЙ main) ===
+def main():
     logger.info("🚀 Запуск Telegram бота в режиме вебхука...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
@@ -171,17 +170,14 @@ async def main():
     app.add_handler(CallbackQueryHandler(refresh_callback, pattern="^refresh$"))
     app.add_error_handler(error_handler)
 
-    # Устанавливаем вебхук и запускаем сервер
+    # Формируем путь и URL
     webhook_path = f"/{TELEGRAM_TOKEN}"
     full_webhook_url = WEBHOOK_URL + webhook_path
 
     logger.info(f"📡 Устанавливаю вебхук: {full_webhook_url}")
-    
-    # Запускаем вебхук
-    await app.bot.set_webhook(url=full_webhook_url)
-    
-    # Запускаем прослушивание входящих запросов
-    await app.run_webhook(
+
+    # 🔥 ЗАПУСКАЕМ ВЕБХУК (СИНХРОННО, БЕЗ async/await!)
+    app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path=webhook_path.lstrip("/"),
@@ -190,12 +186,9 @@ async def main():
         allowed_updates=Update.ALL_TYPES,
     )
 
-    # 🔥 КРИТИЧЕСКИ ВАЖНО: удерживаем процесс в живых
-    # Без этого run_webhook() завершится сразу!
-    logger.info("💤 Бот запущен и ожидает запросы...")
-    while True:
-        await asyncio.sleep(3600)  # спим час, но остаёмся живыми
+    # ⚠️ Эта строка НИКОГДА не выполнится, потому что run_webhook() блокирует выполнение
+    # Но если вдруг — логируем
+    logger.info("🛑 Бот остановлен.")
 
-# === Точка входа ===
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
