@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import logging
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -18,9 +19,8 @@ GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
 GOOGLE_SHEET_NAME = "teleg-bot-passw"
 WORKSHEET_NAME = "page1"
 
-# Новые переменные для вебхуков
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Например: https://mybot.onrender.com
-PORT = int(os.environ.get("PORT", 8000))  # Render сам задаёт PORT
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+PORT = int(os.environ.get("PORT", 8000))
 
 if not TELEGRAM_TOKEN:
     print("❌ ОШИБКА: TELEGRAM_BOT_TOKEN не установлен!")
@@ -162,8 +162,8 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-# === Запуск через вебхук ===
-def main():
+# === Главная асинхронная функция ===
+async def main():
     logger.info("🚀 Запуск Telegram бота в режиме вебхука...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
@@ -171,18 +171,31 @@ def main():
     app.add_handler(CallbackQueryHandler(refresh_callback, pattern="^refresh$"))
     app.add_error_handler(error_handler)
 
-    # 🔥 Запуск вебхука
+    # Устанавливаем вебхук и запускаем сервер
     webhook_path = f"/{TELEGRAM_TOKEN}"
     full_webhook_url = WEBHOOK_URL + webhook_path
 
     logger.info(f"📡 Устанавливаю вебхук: {full_webhook_url}")
-    app.run_webhook(
+    
+    # Запускаем вебхук
+    await app.bot.set_webhook(url=full_webhook_url)
+    
+    # Запускаем прослушивание входящих запросов
+    await app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path=webhook_path.lstrip("/"),
-        webhook_url=full_webhook_url
+        webhook_url=full_webhook_url,
+        drop_pending_updates=True,
+        allowed_updates=Update.ALL_TYPES,
     )
 
-if __name__ == "__main__":
-    main()
+    # 🔥 КРИТИЧЕСКИ ВАЖНО: удерживаем процесс в живых
+    # Без этого run_webhook() завершится сразу!
+    logger.info("💤 Бот запущен и ожидает запросы...")
+    while True:
+        await asyncio.sleep(3600)  # спим час, но остаёмся живыми
 
+# === Точка входа ===
+if __name__ == "__main__":
+    asyncio.run(main())
