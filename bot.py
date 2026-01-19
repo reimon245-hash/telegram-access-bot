@@ -51,10 +51,10 @@ class GoogleSheetsClient:
 
     def _init_client(self):
         scopes = [
-            "https://spreadsheets.google.com/feeds",
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive.file",
-            "https://www.googleapis.com/auth/drive"
+            "https://spreadsheets.google.com/feeds  ",
+            "https://www.googleapis.com/auth/spreadsheets  ",
+            "https://www.googleapis.com/auth/drive.file  ",
+            "https://www.googleapis.com/auth/drive  "
         ]
         creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
@@ -88,26 +88,14 @@ def parse_id_ranges(range_str: str):
 def refresh_button():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ(ждите 30сек)", callback_data="refresh")]])
 
-def wrap_in_box(text: str) -> str:
-    lines = text.split("\n")
-    max_len = max(len(line) for line in lines)
-    top = "┌" + "─" * (max_len + 2) + "┐"
-    middle = "\n".join(f"│ {line.ljust(max_len)} │" for line in lines)
-    bottom = "└" + "─" * (max_len + 2) + "┘"
-    return f"{top}\n{middle}\n{bottom}"
-
 # === Логика получения данных ===
 async def fetch_user_data(user_id: str) -> str:
     try:
         sheet = GoogleSheetsClient().get_worksheet()
+        # 🔧 Указываем ожидаемые заголовки явно, чтобы избежать ошибки с пустыми/дублирующимися колонками
         records = sheet.get_all_records(
             expected_headers=["ID", "Адрес", "Код", "ДОСТУП", "Сотрудники по ID", "ИНФОРМАЦИЯ"]
         )
-
-        # Проверяем, есть ли user_id в столбце "ДОСТУП"
-        access_ids = [str(r.get("ДОСТУП", "")).strip() for r in records]
-        if user_id not in access_ids:
-            return f"Ваш ID {user_id}, передайте его Роману."
 
         user_record = next((r for r in records if str(r.get("ДОСТУП", "")).strip() == user_id), None)
         if not user_record:
@@ -139,11 +127,10 @@ async def fetch_user_data(user_id: str) -> str:
             if obj_id in obj_map:
                 found += 1
                 obj = obj_map[obj_id]
-                content = f"📍 Адрес: {obj['address']}\n🔐 Код: {obj['code']}"
-                messages.append(wrap_in_box(content))
+                messages.append(f"📍 <b>Адрес:</b> {obj['address']}\n🔐 <b>Код:</b> <code>{obj['code']}</code>")
 
         if messages:
-            return f"✅ Доступно кодов: {found}/{len(target_ids)}\n\n" + "\n\n".join(messages)
+            return f"✅ Доступно кодов: {found}/{len(target_ids)}\n\n" + "\n".join(messages)
         else:
             return "📭 Не найдено ни одного объекта по вашим ID."
 
@@ -157,17 +144,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"🚀 Пользователь {user.id} (@{user.username}) запустил бота")
     await update.message.reply_text("Загружаю данные...", parse_mode="HTML")
     result = await fetch_user_data(str(user.id))
-    # Отключаем parse_mode для корректного отображения рамок (Unicode + моноширинный шрифт лучше без HTML)
-    await update.message.reply_text(result, reply_markup=refresh_button(), parse_mode=None)
+    await update.message.reply_text(result, reply_markup=refresh_button(), parse_mode="HTML")
 
 async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user = query.from_user
     logger.info(f"🔄 Пользователь {user.id} обновляет данные")
-    await query.edit_message_text("🔄 Обновляю...")
+    await query.edit_message_text("🔄 Обновляю...", parse_mode="HTML")
     result = await fetch_user_data(str(user.id))
-    await query.edit_message_text(result, reply_markup=refresh_button(), parse_mode=None)
+    await query.edit_message_text(result, reply_markup=refresh_button(), parse_mode="HTML")
 
 # === Обработка ошибок ===
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -187,11 +173,13 @@ def main():
     app.add_handler(CallbackQueryHandler(refresh_callback, pattern="^refresh$"))
     app.add_error_handler(error_handler)
 
+    # Формируем путь и URL
     webhook_path = f"/{TELEGRAM_TOKEN}"
     full_webhook_url = WEBHOOK_URL + webhook_path
 
     logger.info(f"📡 Устанавливаю вебхук: {full_webhook_url}")
 
+    # 🔥 ЗАПУСКАЕМ ВЕБХУК (СИНХРОННО, БЕЗ async/await!)
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
