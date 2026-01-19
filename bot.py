@@ -1,11 +1,3 @@
-def main():
-    # Отладка версий
-    import telegram
-    import telegram.ext
-    print(f"PTB version: {telegram.__version__}")
-    print(f"PTB ext version: {telegram.ext.__version__}")
-    # ... остальной код
-
 import os
 import logging
 import json
@@ -211,4 +203,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
