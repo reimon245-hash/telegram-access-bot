@@ -92,7 +92,10 @@ def refresh_button():
 async def fetch_user_data(user_id: str) -> str:
     try:
         sheet = GoogleSheetsClient().get_worksheet()
-        records = sheet.get_all_records()
+        # 🔧 Указываем ожидаемые заголовки явно, чтобы избежать ошибки с пустыми/дублирующимися колонками
+        records = sheet.get_all_records(
+            expected_headers=["ID", "Адрес", "Код", "ДОСТУП", "Сотрудники по ID", "ИНФОРМАЦИЯ"]
+        )
 
         user_record = next((r for r in records if str(r.get("ДОСТУП", "")).strip() == user_id), None)
         if not user_record:
@@ -186,8 +189,6 @@ def main():
         allowed_updates=Update.ALL_TYPES,
     )
 
-    # ⚠️ Эта строка НИКОГДА не выполнится, потому что run_webhook() блокирует выполнение
-    # Но если вдруг — логируем
     logger.info("🛑 Бот остановлен.")
 
 if __name__ == "__main__":
