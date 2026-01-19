@@ -18,11 +18,18 @@ GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
 GOOGLE_SHEET_NAME = "teleg-bot-passw"
 WORKSHEET_NAME = "page1"
 
+# Новые переменные для вебхуков
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")  # Например: https://mybot.onrender.com
+PORT = int(os.environ.get("PORT", 8000))  # Render сам задаёт PORT
+
 if not TELEGRAM_TOKEN:
     print("❌ ОШИБКА: TELEGRAM_BOT_TOKEN не установлен!")
     sys.exit(1)
 if not GOOGLE_CREDENTIALS_JSON:
     print("❌ ОШИБКА: GOOGLE_CREDENTIALS_JSON не установлен!")
+    sys.exit(1)
+if not WEBHOOK_URL:
+    print("❌ ОШИБКА: WEBHOOK_URL не установлен!")
     sys.exit(1)
 
 # === Логирование ===
@@ -88,7 +95,6 @@ async def fetch_user_data(user_id: str) -> str:
         sheet = GoogleSheetsClient().get_worksheet()
         records = sheet.get_all_records()
 
-        # Найти запись пользователя
         user_record = next((r for r in records if str(r.get("ДОСТУП", "")).strip() == user_id), None)
         if not user_record:
             return "❌ У вас нет доступа к системе."
@@ -101,7 +107,6 @@ async def fetch_user_data(user_id: str) -> str:
         if not target_ids:
             return "⚠️ Не удалось распознать ID объектов."
 
-        # Собираем все объекты по ID
         obj_map = {}
         for r in records:
             try:
@@ -157,41 +162,26 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-# === Запуск ===
+# === Запуск через вебхук ===
 def main():
-    logger.info("🚀 Запуск Telegram бота...")
+    logger.info("🚀 Запуск Telegram бота в режиме вебхука...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(refresh_callback, pattern="^refresh$"))
     app.add_error_handler(error_handler)
 
-    logger.info("✅ Бот готов. Запуск polling...")
-    app.run_polling(
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES
+    # 🔥 Запуск вебхука
+    webhook_path = f"/{TELEGRAM_TOKEN}"
+    full_webhook_url = WEBHOOK_URL + webhook_path
+
+    logger.info(f"📡 Устанавливаю вебхук: {full_webhook_url}")
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=webhook_path.lstrip("/"),
+        webhook_url=full_webhook_url
     )
-
-# --- Health check для Render/Railway ---
-import os
-import threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-
-class Handler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"Bot is running")
-
-def run_health_server():
-    port = int(os.getenv("PORT", 8000))
-    server = HTTPServer(("0.0.0.0", port), Handler)
-    server.serve_forever()
-
-# Запускаем в фоне
-threading.Thread(target=run_health_server, daemon=True).start()
 
 if __name__ == "__main__":
     main()
-
-
