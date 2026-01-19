@@ -172,6 +172,26 @@ def main():
         allowed_updates=Update.ALL_TYPES
     )
 
+# --- Health check для Render/Railway ---
+import os
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is running")
+
+def run_health_server():
+    port = int(os.getenv("PORT", 8000))
+    server = HTTPServer(("0.0.0.0", port), Handler)
+    server.serve_forever()
+
+# Запускаем в фоне
+threading.Thread(target=run_health_server, daemon=True).start()
+
 if __name__ == "__main__":
     main()
+
 
