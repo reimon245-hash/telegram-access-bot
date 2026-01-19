@@ -1,0 +1,4 @@
+services:
+  - type: web
+    runtime: python@3.11
+    start: python bot.py
