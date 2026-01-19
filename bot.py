@@ -128,7 +128,7 @@ async def fetch_user_data(user_id: str) -> str:
                 messages.append(f"📍 <b>Адрес:</b> {obj['address']}\n🔐 <b>Код:</b> <code>{obj['code']}</code>")
 
         if messages:
-            return f"✅ Найдено объектов: {found}/{len(target_ids)}\n\n" + "\n".join(messages)
+            return f"✅ Доступно кодов: {found}/{len(target_ids)}\n\n" + "\n".join(messages)
         else:
             return "📭 Не найдено ни одного объекта по вашим ID."
 
@@ -185,3 +185,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
