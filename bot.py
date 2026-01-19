@@ -86,7 +86,7 @@ def parse_id_ranges(range_str: str):
     return sorted(ids)
 
 def refresh_button():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ(ждите 30сек)", callback_data="refresh")]])
 
 # === Логика получения данных ===
 async def fetch_user_data(user_id: str) -> str:
@@ -193,3 +193,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
