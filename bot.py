@@ -6,7 +6,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
-    CallbackQueryandler,
+    CallbackQueryHandler,
     ContextTypes,
 )
 from google.oauth2.service_account import Credentials
@@ -174,3 +174,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
