@@ -51,10 +51,10 @@ class GoogleSheetsClient:
 
     def _init_client(self):
         scopes = [
-            "https://spreadsheets.google.com/feeds  ",
-            "https://www.googleapis.com/auth/spreadsheets  ",
-            "https://www.googleapis.com/auth/drive.file  ",
-            "https://www.googleapis.com/auth/drive  "
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/spreadsheets",
+            "https://www.googleapis.com/auth/drive.file",
+            "https://www.googleapis.com/auth/drive"
         ]
         creds_dict = json.loads(GOOGLE_CREDENTIALS_JSON)
         credentials = Credentials.from_service_account_info(creds_dict, scopes=scopes)
@@ -92,7 +92,6 @@ def refresh_button():
 async def fetch_user_data(user_id: str) -> str:
     try:
         sheet = GoogleSheetsClient().get_worksheet()
-        # 🔧 Указываем ожидаемые заголовки явно, чтобы избежать ошибки с пустыми/дублирующимися колонками
         records = sheet.get_all_records(
             expected_headers=["ID", "Адрес", "Код", "ДОСТУП", "Сотрудники по ID", "ИНФОРМАЦИЯ"]
         )
@@ -127,10 +126,11 @@ async def fetch_user_data(user_id: str) -> str:
             if obj_id in obj_map:
                 found += 1
                 obj = obj_map[obj_id]
-                messages.append(f"📍 <b>Адрес:</b> {obj['address']}\n🔐 <b>Код:</b> <code>{obj['code']}</code>")
+                # Изменён формат вывода: убрано "Адрес:", оставлено только "Код" перед кодом
+                messages.append(f"{obj['address']}\n<b>Код</b> <code>{obj['code']}</code>")
 
         if messages:
-            return f"✅ Доступно кодов: {found}/{len(target_ids)}\n\n" + "\n".join(messages)
+            return f"✅ Доступно кодов: {found}/{len(target_ids)}\n\n" + "\n\n".join(messages)
         else:
             return "📭 Не найдено ни одного объекта по вашим ID."
 
@@ -173,13 +173,11 @@ def main():
     app.add_handler(CallbackQueryHandler(refresh_callback, pattern="^refresh$"))
     app.add_error_handler(error_handler)
 
-    # Формируем путь и URL
     webhook_path = f"/{TELEGRAM_TOKEN}"
     full_webhook_url = WEBHOOK_URL + webhook_path
 
     logger.info(f"📡 Устанавливаю вебхук: {full_webhook_url}")
 
-    # 🔥 ЗАПУСКАЕМ ВЕБХУК (СИНХРОННО, БЕЗ async/await!)
     app.run_webhook(
         listen="0.0.0.0",
         port=PORT,
