@@ -33,7 +33,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# === Google Sheets клиент ===
+# === Google Sheets клиент (Singleton) ===
 class GoogleSheetsClient:
     _instance = None
 
@@ -80,7 +80,7 @@ def parse_id_ranges(range_str: str):
             continue
     return sorted(ids)
 
-def build_keyboard(obj_map, expanded_obj_id=None):
+def build_keyboard(obj_map, code_shown_obj_id=None):
     buttons = []
     all_ids = list(obj_map.keys())
     COLS = 2
@@ -95,10 +95,8 @@ def build_keyboard(obj_map, expanded_obj_id=None):
             obj_id = all_ids[idx]
             data = obj_map[obj_id]
 
-            # Формат кнопки: всегда компактный
-            if obj_id == expanded_obj_id:
-                # Показываем код прямо в кнопке (без жирного, но чётко)
-                button_text = f"{data['address']}\nКод: {data['code']}"
+            if obj_id == code_shown_obj_id:
+                button_text = f"Код: {data['code']}"
             else:
                 button_text = data["address"]
 
@@ -113,7 +111,7 @@ def build_keyboard(obj_map, expanded_obj_id=None):
 def build_no_access_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
 
-# === Получение данных ===
+# === Получение данных из Google Sheets ===
 async def fetch_user_objects(user_id: str):
     try:
         sheet = GoogleSheetsClient().get_worksheet()
@@ -174,7 +172,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     context.chat_data["obj_map"] = obj_map
-    context.chat_data["expanded"] = None
+    context.chat_data["code_shown"] = None
     keyboard = build_keyboard(obj_map)
     await msg.edit_text("Выберите объект:", reply_markup=keyboard)
 
@@ -190,17 +188,17 @@ async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
         await query.edit_message_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
         context.chat_data.pop("obj_map", None)
-        context.chat_data.pop("expanded", None)
+        context.chat_data.pop("code_shown", None)
         return
 
     if not obj_map:
         await query.edit_message_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
         context.chat_data.pop("obj_map", None)
-        context.chat_data.pop("expanded", None)
+        context.chat_data.pop("code_shown", None)
         return
 
     context.chat_data["obj_map"] = obj_map
-    context.chat_data["expanded"] = None
+    context.chat_data["code_shown"] = None
     keyboard = build_keyboard(obj_map)
     await query.edit_message_text("Выберите объект:", reply_markup=keyboard)
 
@@ -222,7 +220,7 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             context.chat_data.clear()
             return
         context.chat_data["obj_map"] = obj_map
-        context.chat_data["expanded"] = None
+        context.chat_data["code_shown"] = None
 
     try:
         obj_id = int(query.data.split("_", 1)[1])
@@ -234,17 +232,15 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text("❌ Объект не найден.")
         return
 
-    current_expanded = context.chat_data.get("expanded")
-    if current_expanded == obj_id:
-        new_expanded = None
+    current_code_shown = context.chat_data.get("code_shown")
+    if current_code_shown == obj_id:
+        # Скрыть код → вернуться к адресу
+        context.chat_data["code_shown"] = None
     else:
-        new_expanded = obj_id
+        # Показать код этого объекта (и скрыть предыдущий)
+        context.chat_data["code_shown"] = obj_id
 
-    if current_expanded == new_expanded:
-        return
-
-    context.chat_data["expanded"] = new_expanded
-    keyboard = build_keyboard(obj_map, expanded_obj_id=new_expanded)
+    keyboard = build_keyboard(obj_map, code_shown_obj_id=context.chat_data["code_shown"])
     await query.edit_message_reply_markup(reply_markup=keyboard)
 
 # === Обработка ошибок ===
