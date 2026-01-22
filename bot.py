@@ -84,10 +84,15 @@ def parse_id_ranges(range_str: str):
 
 # Кнопка обновления данных
 def refresh_button():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ (ждите 30 сек)", callback_data="refresh")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
 
 # === 5. Логика получения данных из Google Sheets по ID пользователя ===
-async def fetch_user_data(user_id: str) -> str:
+async def fetch_user_data(user_id: str) -> dict:
+    """
+    Возвращает словарь:
+    - 'has_access': bool
+    - 'message': str
+    """
     try:
         sheet = GoogleSheetsClient().get_worksheet()
         records = sheet.get_all_records(
@@ -97,15 +102,24 @@ async def fetch_user_data(user_id: str) -> str:
         # Поиск записи по полю "ДОСТУП"
         user_record = next((r for r in records if str(r.get("ДОСТУП", "")).strip() == user_id), None)
         if not user_record:
-            return "❌ У вас нет доступа к системе."
+            return {
+                "has_access": False,
+                "message": f"Ваш телеграм ID — <code>{user_id}</code>. Передайте его Роману."
+            }
 
         info_field = str(user_record.get("ИНФОРМАЦИЯ", "")).strip()
         if not info_field:
-            return "📭 Нет доступных данных."
+            return {
+                "has_access": True,
+                "message": "📭 Нет доступных данных."
+            }
 
         target_ids = parse_id_ranges(info_field)
         if not target_ids:
-            return "⚠️ Не удалось распознать ID объектов."
+            return {
+                "has_access": True,
+                "message": "⚠️ Не удалось распознать ID объектов."
+            }
 
         # Составление карты объектов по ID
         obj_map = {}
@@ -130,13 +144,21 @@ async def fetch_user_data(user_id: str) -> str:
                 messages.append(f"{obj['address']}\n<b>Код</b> <code>{obj['code']}</code>")
 
         if messages:
-            return f"✅ Доступно кодов: {found}/{len(target_ids)}\n\n" + "\n\n".join(messages)
+            message = f"✅ Доступно кодов: {found}/{len(target_ids)}\n\n" + "\n\n".join(messages)
         else:
-            return "📭 Не найдено ни одного объекта по вашим ID."
+            message = "📭 Не найдено ни одного объекта по вашим ID."
+
+        return {
+            "has_access": True,
+            "message": message
+        }
 
     except Exception as e:
         logger.error(f"Ошибка при получении данных: {e}")
-        return "❌ Ошибка сервера. Попробуйте позже."
+        return {
+            "has_access": False,
+            "message": "❌ Ошибка сервера. Попробуйте позже."
+        }
 
 # === 6. Обработчики команд Telegram ===
 
@@ -146,7 +168,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"🚀 Пользователь {user.id} (@{user.username}) запустил бота")
     await update.message.reply_text("Загружаю данные...", parse_mode="HTML")
     result = await fetch_user_data(str(user.id))
-    await update.message.reply_text(result, reply_markup=refresh_button(), parse_mode="HTML")
+    await update.message.reply_text(
+        result["message"],
+        reply_markup=refresh_button(),
+        parse_mode="HTML"
+    )
 
 # Обработка нажатия кнопки "Обновить"
 async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -156,7 +182,11 @@ async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"🔄 Пользователь {user.id} обновляет данные")
     await query.edit_message_text("🔄 Обновляю...", parse_mode="HTML")
     result = await fetch_user_data(str(user.id))
-    await query.edit_message_text(result, reply_markup=refresh_button(), parse_mode="HTML")
+    await query.edit_message_text(
+        result["message"],
+        reply_markup=refresh_button(),
+        parse_mode="HTML"
+    )
 
 # === 7. Обработка ошибок Telegram API ===
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
