@@ -83,43 +83,50 @@ def parse_id_ranges(range_str: str):
 def build_keyboard(obj_map, expanded_obj_id=None):
     buttons = []
     all_ids = list(obj_map.keys())
-    
-    # Адаптивное количество колонок: до 6 объектов — одна кнопка на строку (полная ширина)
-    COLS = 1 if len(all_ids) <= 6 else 2
 
-    i = 0
-    while i < len(all_ids):
-        row = []
-        added_expanded = False
-        for j in range(COLS):
-            idx = i + j
-            if idx >= len(all_ids):
-                break
-            obj_id = all_ids[idx]
+    # Если объектов <= 6 — одна кнопка на строку (полная ширина)
+    if len(all_ids) <= 6:
+        for obj_id in all_ids:
             data = obj_map[obj_id]
-
             if obj_id == expanded_obj_id:
-                # Раскрытая кнопка — всегда одна в строке
-                row = [InlineKeyboardButton(f"{data['address']}\nКод: {data['code']}", callback_data=f"show_{obj_id}")]
-                buttons.append(row)
-                added_expanded = True
-                break
+                text = f"{data['address']}\nКод: {data['code']}"
             else:
-                row.append(InlineKeyboardButton(data["address"], callback_data=f"show_{obj_id}"))
+                text = data["address"]
+            buttons.append([InlineKeyboardButton(text, callback_data=f"show_{obj_id}")])
+    else:
+        # Больше 6 объектов — 2 колонки для компактности
+        COLS = 2
+        i = 0
+        while i < len(all_ids):
+            row = []
+            added_expanded = False
+            for j in range(COLS):
+                idx = i + j
+                if idx >= len(all_ids):
+                    break
+                obj_id = all_ids[idx]
+                data = obj_map[obj_id]
 
-        if added_expanded:
-            i += COLS
-        else:
-            if row:
-                buttons.append(row)
-            i += COLS
+                if obj_id == expanded_obj_id:
+                    # Раскрытая — всегда одна в строке
+                    buttons.append([InlineKeyboardButton(
+                        f"{data['address']}\nКод: {data['code']}",
+                        callback_data=f"show_{obj_id}"
+                    )])
+                    added_expanded = True
+                    break
+                else:
+                    row.append(InlineKeyboardButton(data["address"], callback_data=f"show_{obj_id}"))
+
+            if added_expanded:
+                i += COLS
+            else:
+                if row:
+                    buttons.append(row)
+                i += COLS
 
     buttons.append([InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")])
     return InlineKeyboardMarkup(buttons)
-
-def build_no_access_keyboard():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
-
 # === Получение данных из Google Sheets ===
 async def fetch_user_objects(user_id: str):
     try:
@@ -284,3 +291,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
