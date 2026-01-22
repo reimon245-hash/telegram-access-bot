@@ -80,29 +80,42 @@ def parse_id_ranges(range_str: str):
             continue
     return sorted(ids)
 
+def truncate_address(address: str, max_length=60) -> str:
+    """Обрезает строку до max_length символов, добавляя '...' при необходимости."""
+    if not isinstance(address, str):
+        address = str(address)
+    if len(address) <= max_length:
+        return address
+    return address[:max_length - 3] + "..."
+
 def build_keyboard(obj_map, expanded_obj_id=None):
     buttons = []
     for obj_id, data in obj_map.items():
         address = data["address"]
         code = data["code"]
         if obj_id == expanded_obj_id:
-            # Раскрытая кнопка: показываем адрес + код
-            text = f"{address}\nКод: {code}"
-            callback = f"show_{obj_id}"
+            # Пытаемся показать полную информацию
+            full_text = f"{address}\nКод: {code}"
+            if len(full_text) > 64:
+                # Вычисляем, сколько символов можно оставить под адрес
+                code_part_len = len(f"\nКод: {code}")
+                available_for_addr = max(0, 64 - code_part_len - 3)
+                short_addr = truncate_address(address, available_for_addr)
+                full_text = f"{short_addr}\nКод: {code}"
+                if len(full_text) > 64:
+                    full_text = truncate_address(full_text, 64)
+            text = full_text
         else:
-            # Свёрнутая: только адрес
-            text = address
-            callback = f"show_{obj_id}"
-        buttons.append([InlineKeyboardButton(text, callback_data=callback)])
-    # Добавляем кнопку "Обновить" вниз
+            text = truncate_address(address, 60)
+        buttons.append([InlineKeyboardButton(text, callback_data=f"show_{obj_id}")])
     buttons.append([InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")])
     return InlineKeyboardMarkup(buttons)
 
+def build_no_access_keyboard():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
+
 # === 5. Получение данных пользователя ===
 async def fetch_user_objects(user_id: str):
-    """
-    Возвращает словарь {obj_id: {"address": ..., "code": ...}} или None, если нет доступа.
-    """
     try:
         sheet = GoogleSheetsClient().get_worksheet()
         records = sheet.get_all_records(
@@ -135,7 +148,7 @@ async def fetch_user_objects(user_id: str):
         logger.error(f"Ошибка при получении данных: {e}")
         return None
 
-# === 6. Обработчики ===
+# === 6. Обработчики команд и колбэков ===
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -152,15 +165,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
         return
 
-    # Сохраняем объекты в контекст чата
     context.chat_data["obj_map"] = obj_map
-    context.chat_data["expanded"] = None  # ничего не раскрыто
+    context.chat_data["expanded"] = None
 
     keyboard = build_keyboard(obj_map)
     await update.message.reply_text("Выберите объект:", reply_markup=keyboard)
-
-def build_no_access_keyboard():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
 
 async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -192,7 +201,6 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text("⚠️ Данные устарели. Нажмите «ОБНОВИТЬ».", reply_markup=build_no_access_keyboard())
         return
 
-    # Извлекаем ID объекта из callback_data: "show_123"
     try:
         obj_id = int(query.data.split("_", 1)[1])
     except (IndexError, ValueError):
@@ -203,7 +211,6 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text("❌ Объект не найден.")
         return
 
-    # Меняем раскрытый объект
     context.chat_data["expanded"] = obj_id
     keyboard = build_keyboard(obj_map, expanded_obj_id=obj_id)
     await query.edit_message_text("Выберите объект:", reply_markup=keyboard)
@@ -217,7 +224,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-# === 8. Запуск ===
+# === 8. Запуск бота ===
 def main():
     logger.info("🚀 Запуск Telegram бота в режиме long polling...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
