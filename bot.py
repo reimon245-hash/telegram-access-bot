@@ -81,31 +81,32 @@ def parse_id_ranges(range_str: str):
     return sorted(ids)
 
 def build_keyboard(obj_map, expanded_obj_id=None):
-    buttons = []
-
-    # Раскрытая кнопка — всегда одна в строке
-    if expanded_obj_id is not None and expanded_obj_id in obj_map:
-        data = obj_map[expanded_obj_id]
-        text = f"{data['address']}\nКод: {data['code']}"
-        buttons.append([InlineKeyboardButton(text, callback_data=f"show_{expanded_obj_id}")])
-
-    # Свёрнутые кнопки — группируем по 2
-    folded_buttons = []
+    """
+    Строит клавиатуру, где раскрытая кнопка остаётся на своём месте.
+    Свёрнутые кнопки группируются по 2 в строке.
+    """
+    # Сначала создаём список всех кнопок в порядке obj_id
+    all_buttons = []
     for obj_id, data in obj_map.items():
         if obj_id == expanded_obj_id:
-            continue
-        text = data["address"]
-        folded_buttons.append(InlineKeyboardButton(text, callback_data=f"show_{obj_id}"))
+            # Раскрытая: показываем адрес + код
+            text = f"{data['address']}\nКод: {data['code']}"
+        else:
+            # Свёрнутая: только адрес
+            text = data["address"]
+        all_buttons.append(InlineKeyboardButton(text, callback_data=f"show_{obj_id}"))
 
+    # Группируем по 2 кнопки в строку
     COLS = 2
-    for i in range(0, len(folded_buttons), COLS):
-        row = folded_buttons[i:i + COLS]
-        buttons.append(row)
+    rows = []
+    for i in range(0, len(all_buttons), COLS):
+        row = all_buttons[i:i + COLS]
+        rows.append(row)
 
-    # Кнопка обновления — всегда внизу
-    buttons.append([InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")])
+    # Добавляем кнопку "Обновить" в самый низ
+    rows.append([InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")])
 
-    return InlineKeyboardMarkup(buttons)
+    return InlineKeyboardMarkup(rows)
 
 def build_no_access_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
@@ -149,23 +150,25 @@ async def fetch_user_objects(user_id: str):
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     logger.info(f"🚀 Пользователь {user.id} (@{user.username}) запустил бота")
-    await update.message.reply_text("Загружаю данные...", parse_mode="HTML")
-
+    
     obj_map = await fetch_user_objects(str(user.id))
     if obj_map is None:
         msg = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
-        await update.message.reply_text(msg, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
+        reply = await update.message.reply_text(msg, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
+        context.chat_data["message_id"] = reply.message_id
         return
 
     if not obj_map:
-        await update.message.reply_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
+        reply = await update.message.reply_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
+        context.chat_data["message_id"] = reply.message_id
         return
 
     context.chat_data["obj_map"] = obj_map
     context.chat_data["expanded"] = None
 
     keyboard = build_keyboard(obj_map)
-    await update.message.reply_text("Выберите объект:", reply_markup=keyboard)
+    reply = await update.message.reply_text("Выберите объект:", reply_markup=keyboard)
+    context.chat_data["message_id"] = reply.message_id
 
 async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -174,17 +177,20 @@ async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.info(f"🔄 Пользователь {user.id} обновляет данные")
 
     obj_map = await fetch_user_objects(str(user.id))
+    chat_data = context.chat_data
+
     if obj_map is None:
         msg = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
-        await query.edit_message_text(msg, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
+        keyboard = build_no_access_keyboard()
+        await query.edit_message_text(msg, reply_markup=keyboard, parse_mode="HTML")
         return
 
     if not obj_map:
         await query.edit_message_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
         return
 
-    context.chat_data["obj_map"] = obj_map
-    context.chat_data["expanded"] = None
+    chat_data["obj_map"] = obj_map
+    chat_data["expanded"] = None
     keyboard = build_keyboard(obj_map)
     await query.edit_message_text("Выберите объект:", reply_markup=keyboard)
 
@@ -207,6 +213,7 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await query.edit_message_text("❌ Объект не найден.")
         return
 
+    # Обновляем раскрытый объект
     context.chat_data["expanded"] = obj_id
     keyboard = build_keyboard(obj_map, expanded_obj_id=obj_id)
     await query.edit_message_text("Выберите объект:", reply_markup=keyboard)
