@@ -208,7 +208,6 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     obj_map = context.chat_data.get("obj_map")
     if not obj_map:
-        # Данные устарели — принудительно обновляем через refresh логику
         user = query.from_user
         obj_map = await fetch_user_objects(str(user.id))
         if obj_map is None:
@@ -235,20 +234,31 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     current_expanded = context.chat_data.get("expanded")
     if current_expanded == obj_id:
-        context.chat_data["expanded"] = None
+        new_expanded = None
     else:
-        context.chat_data["expanded"] = obj_id
+        new_expanded = obj_id
 
-    keyboard = build_keyboard(obj_map, expanded_obj_id=context.chat_data["expanded"])
+    # 🔥 Проверка: если состояние не изменилось — не обновляем
+    if current_expanded == new_expanded:
+        return  # ничего не делать
+
+    context.chat_data["expanded"] = new_expanded
+    keyboard = build_keyboard(obj_map, expanded_obj_id=new_expanded)
     await query.edit_message_reply_markup(reply_markup=keyboard)
 
 # === Обработка ошибок ===
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Ошибка: {context.error}", exc_info=True)
+    error = context.error
+    logger.error(f"Произошла ошибка: {error}", exc_info=True)
+
+    # Безопасно игнорируем "сообщение не изменилось"
+    if "Message is not modified" in str(error):
+        return
+
+    # Уведомляем пользователя только о реальных проблемах
     if update and update.effective_message:
         try:
-            # Для отладки: показываем саму ошибку
-            await update.effective_message.reply_text(f"❌ Ошибка: {str(context.error)[:500]}")
+            await update.effective_message.reply_text("❌ Произошла ошибка. Администратор уведомлён.")
         except Exception:
             pass
 
@@ -267,4 +277,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
