@@ -3,7 +3,6 @@ import sys
 import json
 import logging
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import BadRequest
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -34,7 +33,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# === Google Sheets клиент ===
+# === Google Sheets клиент (Singleton) ===
 class GoogleSheetsClient:
     _instance = None
 
@@ -59,6 +58,8 @@ class GoogleSheetsClient:
     def get_worksheet(self):
         sheet = self.client.open(GOOGLE_SHEET_NAME)
         return sheet.worksheet(WORKSHEET_NAME)
+
+# === Вспомогательные функции ===
 
 def parse_id_ranges(range_str: str):
     if not range_str or not isinstance(range_str, str):
@@ -116,6 +117,7 @@ def build_keyboard(obj_map, expanded_obj_id=None):
 def build_no_access_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
 
+# === Получение данных из Google Sheets ===
 async def fetch_user_objects(user_id: str):
     try:
         sheet = GoogleSheetsClient().get_worksheet()
@@ -149,46 +151,52 @@ async def fetch_user_objects(user_id: str):
         logger.error(f"Ошибка при получении данных: {e}")
         return None
 
-# === Обновлённые обработчики ===
+# === Обработчики ===
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     logger.info(f"🚀 Пользователь {user.id} (@{user.username}) запустил бота")
-
-    # Отправляем временное сообщение
-    temp_msg = await update.message.reply_text("Загружаю данные...", reply_markup=build_no_access_keyboard())
+    msg = await update.message.reply_text("Загружаю данные...", reply_markup=build_no_access_keyboard())
 
     obj_map = await fetch_user_objects(str(user.id))
     if obj_map is None:
         text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
-        await temp_msg.edit_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
+        await msg.edit_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
         return
 
     if not obj_map:
-        await temp_msg.edit_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
+        await msg.edit_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
         return
 
     context.chat_data["obj_map"] = obj_map
     context.chat_data["expanded"] = None
     keyboard = build_keyboard(obj_map)
-    await temp_msg.edit_text("Выберите объект:", reply_markup=keyboard)
+    await msg.edit_text("Выберите объект:", reply_markup=keyboard)
 
 async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user = query.from_user
-    logger.info(f"🔄 Пользователь {user.id} обновляет данные")
+    logger.info(f"🔄 Пользователь {user.id} нажал «ОБНОВИТЬ»")
 
+    # Полностью перезагружаем данные — не используем старый chat_data
     obj_map = await fetch_user_objects(str(user.id))
+
     if obj_map is None:
         text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
         await query.edit_message_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
+        # Очищаем старые данные
+        context.chat_data.pop("obj_map", None)
+        context.chat_data.pop("expanded", None)
         return
 
     if not obj_map:
         await query.edit_message_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
+        context.chat_data.pop("obj_map", None)
+        context.chat_data.pop("expanded", None)
         return
 
+    # Обновляем контекст
     context.chat_data["obj_map"] = obj_map
     context.chat_data["expanded"] = None
     keyboard = build_keyboard(obj_map)
@@ -200,8 +208,20 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     obj_map = context.chat_data.get("obj_map")
     if not obj_map:
-        await query.edit_message_text("⚠️ Данные устарели. Нажмите «ОБНОВИТЬ».", reply_markup=build_no_access_keyboard())
-        return
+        # Данные устарели — принудительно обновляем через refresh логику
+        user = query.from_user
+        obj_map = await fetch_user_objects(str(user.id))
+        if obj_map is None:
+            text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
+            await query.edit_message_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
+            context.chat_data.clear()
+            return
+        if not obj_map:
+            await query.edit_message_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
+            context.chat_data.clear()
+            return
+        context.chat_data["obj_map"] = obj_map
+        context.chat_data["expanded"] = None
 
     try:
         obj_id = int(query.data.split("_", 1)[1])
@@ -222,6 +242,7 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     keyboard = build_keyboard(obj_map, expanded_obj_id=context.chat_data["expanded"])
     await query.edit_message_reply_markup(reply_markup=keyboard)
 
+# === Обработка ошибок ===
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}", exc_info=True)
     if update and update.effective_message:
@@ -245,4 +266,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
