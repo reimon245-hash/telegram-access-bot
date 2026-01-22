@@ -83,7 +83,9 @@ def parse_id_ranges(range_str: str):
 def build_keyboard(obj_map, expanded_obj_id=None):
     buttons = []
     all_ids = list(obj_map.keys())
-    COLS = 2
+    
+    # Адаптивное количество колонок: до 6 объектов — одна кнопка на строку (полная ширина)
+    COLS = 1 if len(all_ids) <= 6 else 2
 
     i = 0
     while i < len(all_ids):
@@ -97,6 +99,7 @@ def build_keyboard(obj_map, expanded_obj_id=None):
             data = obj_map[obj_id]
 
             if obj_id == expanded_obj_id:
+                # Раскрытая кнопка — всегда одна в строке
                 row = [InlineKeyboardButton(f"{data['address']}\nКод: {data['code']}", callback_data=f"show_{obj_id}")]
                 buttons.append(row)
                 added_expanded = True
@@ -125,7 +128,13 @@ async def fetch_user_objects(user_id: str):
             expected_headers=["ID", "Адрес", "Код", "ДОСТУП", "Сотрудники по ID", "ИНФОРМАЦИЯ"]
         )
 
-        user_record = next((r for r in records if str(r.get("ДОСТУП", "")).strip() == user_id), None)
+        user_record = None
+        for r in records:
+            access_field = str(r.get("ДОСТУП", "")).strip()
+            if access_field == user_id:
+                user_record = r
+                break
+
         if not user_record:
             return None
 
@@ -137,18 +146,21 @@ async def fetch_user_objects(user_id: str):
         obj_map = {}
         for r in records:
             try:
-                obj_id = int(r.get("ID", 0))
+                raw_id = r.get("ID")
+                if raw_id is None or raw_id == "":
+                    continue
+                obj_id = int(raw_id)
                 if obj_id in target_ids:
-                    obj_map[obj_id] = {
-                        "address": r.get("Адрес", "Не указан"),
-                        "code": r.get("Код", "Не указан")
-                    }
-            except (ValueError, TypeError):
+                    address = r.get("Адрес") or "Не указан"
+                    code = r.get("Код") or "Не указан"
+                    obj_map[obj_id] = {"address": str(address), "code": str(code)}
+            except (ValueError, TypeError, AttributeError):
                 continue
+
         return obj_map
 
     except Exception as e:
-        logger.error(f"Ошибка при получении данных: {e}")
+        logger.error(f"Ошибка при получении данных из Google Sheets: {e}", exc_info=True)
         return None
 
 # === Обработчики ===
@@ -179,13 +191,11 @@ async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     logger.info(f"🔄 Пользователь {user.id} нажал «ОБНОВИТЬ»")
 
-    # Полностью перезагружаем данные — не используем старый chat_data
     obj_map = await fetch_user_objects(str(user.id))
 
     if obj_map is None:
         text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
         await query.edit_message_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
-        # Очищаем старые данные
         context.chat_data.pop("obj_map", None)
         context.chat_data.pop("expanded", None)
         return
@@ -196,7 +206,6 @@ async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.chat_data.pop("expanded", None)
         return
 
-    # Обновляем контекст
     context.chat_data["obj_map"] = obj_map
     context.chat_data["expanded"] = None
     keyboard = build_keyboard(obj_map)
@@ -238,9 +247,8 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         new_expanded = obj_id
 
-    # 🔥 Проверка: если состояние не изменилось — не обновляем
     if current_expanded == new_expanded:
-        return  # ничего не делать
+        return
 
     context.chat_data["expanded"] = new_expanded
     keyboard = build_keyboard(obj_map, expanded_obj_id=new_expanded)
@@ -251,11 +259,10 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     error = context.error
     logger.error(f"Произошла ошибка: {error}", exc_info=True)
 
-    # Безопасно игнорируем "сообщение не изменилось"
+    # Игнорируем безобидную ошибку "Message is not modified"
     if "Message is not modified" in str(error):
         return
 
-    # Уведомляем пользователя только о реальных проблемах
     if update and update.effective_message:
         try:
             await update.effective_message.reply_text("❌ Произошла ошибка. Администратор уведомлён.")
@@ -277,5 +284,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
