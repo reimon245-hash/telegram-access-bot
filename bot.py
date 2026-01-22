@@ -12,26 +12,21 @@ from telegram.ext import (
 from google.oauth2.service_account import Credentials
 import gspread
 
-# === Конфигурация ===
+# === 1. Конфигурация: получение токенов и настроек из переменных окружения ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
 GOOGLE_SHEET_NAME = "teleg-bot-passw"
 WORKSHEET_NAME = "page1"
 
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-PORT = int(os.environ.get("PORT", 8000))
-
+# Проверка обязательных переменных
 if not TELEGRAM_TOKEN:
     print("❌ ОШИБКА: TELEGRAM_BOT_TOKEN не установлен!")
     sys.exit(1)
 if not GOOGLE_CREDENTIALS_JSON:
     print("❌ ОШИБКА: GOOGLE_CREDENTIALS_JSON не установлен!")
     sys.exit(1)
-if not WEBHOOK_URL:
-    print("❌ ОШИБКА: WEBHOOK_URL не установлен!")
-    sys.exit(1)
 
-# === Логирование ===
+# === 2. Настройка логирования ===
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO,
@@ -39,7 +34,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# === Google Sheets клиент (singleton) ===
+# === 3. Singleton-клиент для Google Sheets (инициализируется один раз) ===
 class GoogleSheetsClient:
     _instance = None
 
@@ -65,7 +60,9 @@ class GoogleSheetsClient:
         sheet = self.client.open(GOOGLE_SHEET_NAME)
         return sheet.worksheet(WORKSHEET_NAME)
 
-# === Вспомогательные функции ===
+# === 4. Вспомогательные функции ===
+
+# Парсинг диапазонов ID (например: "1-5,7,10")
 def parse_id_ranges(range_str: str):
     if not range_str or not isinstance(range_str, str):
         return []
@@ -85,10 +82,11 @@ def parse_id_ranges(range_str: str):
             continue
     return sorted(ids)
 
+# Кнопка обновления данных
 def refresh_button():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ(ждите 30сек)", callback_data="refresh")]])
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ (ждите 30 сек)", callback_data="refresh")]])
 
-# === Логика получения данных ===
+# === 5. Логика получения данных из Google Sheets по ID пользователя ===
 async def fetch_user_data(user_id: str) -> str:
     try:
         sheet = GoogleSheetsClient().get_worksheet()
@@ -96,6 +94,7 @@ async def fetch_user_data(user_id: str) -> str:
             expected_headers=["ID", "Адрес", "Код", "ДОСТУП", "Сотрудники по ID", "ИНФОРМАЦИЯ"]
         )
 
+        # Поиск записи по полю "ДОСТУП"
         user_record = next((r for r in records if str(r.get("ДОСТУП", "")).strip() == user_id), None)
         if not user_record:
             return "❌ У вас нет доступа к системе."
@@ -108,6 +107,7 @@ async def fetch_user_data(user_id: str) -> str:
         if not target_ids:
             return "⚠️ Не удалось распознать ID объектов."
 
+        # Составление карты объектов по ID
         obj_map = {}
         for r in records:
             try:
@@ -120,13 +120,13 @@ async def fetch_user_data(user_id: str) -> str:
             except (ValueError, TypeError):
                 continue
 
+        # Формирование сообщения
         messages = []
         found = 0
         for obj_id in target_ids:
             if obj_id in obj_map:
                 found += 1
                 obj = obj_map[obj_id]
-                # Изменён формат вывода: убрано "Адрес:", оставлено только "Код" перед кодом
                 messages.append(f"{obj['address']}\n<b>Код</b> <code>{obj['code']}</code>")
 
         if messages:
@@ -138,7 +138,9 @@ async def fetch_user_data(user_id: str) -> str:
         logger.error(f"Ошибка при получении данных: {e}")
         return "❌ Ошибка сервера. Попробуйте позже."
 
-# === Обработчики команд ===
+# === 6. Обработчики команд Telegram ===
+
+# Команда /start — загрузка данных пользователя
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     logger.info(f"🚀 Пользователь {user.id} (@{user.username}) запустил бота")
@@ -146,6 +148,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = await fetch_user_data(str(user.id))
     await update.message.reply_text(result, reply_markup=refresh_button(), parse_mode="HTML")
 
+# Обработка нажатия кнопки "Обновить"
 async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -155,7 +158,7 @@ async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = await fetch_user_data(str(user.id))
     await query.edit_message_text(result, reply_markup=refresh_button(), parse_mode="HTML")
 
-# === Обработка ошибок ===
+# === 7. Обработка ошибок Telegram API ===
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}", exc_info=True)
     if update and update.effective_message:
@@ -164,30 +167,21 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-# === Запуск бота (СИНХРОННЫЙ main) ===
+# === 8. Запуск бота через long polling (без вебхуков) ===
 def main():
-    logger.info("🚀 Запуск Telegram бота в режиме вебхука...")
+    logger.info("🚀 Запуск Telegram бота в режиме long polling...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
+    # Регистрация обработчиков
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(refresh_callback, pattern="^refresh$"))
     app.add_error_handler(error_handler)
 
-    webhook_path = f"/{TELEGRAM_TOKEN}"
-    full_webhook_url = WEBHOOK_URL + webhook_path
-
-    logger.info(f"📡 Устанавливаю вебхук: {full_webhook_url}")
-
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=webhook_path.lstrip("/"),
-        webhook_url=full_webhook_url,
-        drop_pending_updates=True,
-        allowed_updates=Update.ALL_TYPES,
-    )
+    # Запуск бота без вебхуков — просто long polling
+    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
 
     logger.info("🛑 Бот остановлен.")
 
+# Точка входа
 if __name__ == "__main__":
     main()
