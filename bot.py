@@ -34,7 +34,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# === 3. Singleton-клиент для Google Sheets (инициализируется один раз) ===
+# === 3. Singleton-клиент для Google Sheets ===
 class GoogleSheetsClient:
     _instance = None
 
@@ -62,7 +62,6 @@ class GoogleSheetsClient:
 
 # === 4. Вспомогательные функции ===
 
-# Парсинг диапазонов ID (например: "1-5,7,10")
 def parse_id_ranges(range_str: str):
     if not range_str or not isinstance(range_str, str):
         return []
@@ -82,46 +81,37 @@ def parse_id_ranges(range_str: str):
             continue
     return sorted(ids)
 
-# Кнопка обновления данных
-def refresh_button():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
-
-# === 5. Логика получения данных из Google Sheets по ID пользователя ===
-async def fetch_user_data(user_id: str) -> dict:
-    """
-    Возвращает словарь:
-    - 'has_access': bool
-    - 'message': str
-    """
+# Генерация клавиатуры с кнопками "Показать" или открытым кодом
+def build_keyboard_and_text(user_id: str, revealed_obj_id: int = None):
     try:
         sheet = GoogleSheetsClient().get_worksheet()
         records = sheet.get_all_records(
             expected_headers=["ID", "Адрес", "Код", "ДОСТУП", "Сотрудники по ID", "ИНФОРМАЦИЯ"]
         )
 
-        # Поиск записи по полю "ДОСТУП"
+        # Найти пользователя
         user_record = next((r for r in records if str(r.get("ДОСТУП", "")).strip() == user_id), None)
         if not user_record:
             return {
-                "has_access": False,
-                "message": f"Ваш телеграм ID — <code>{user_id}</code>. Передайте его Роману."
+                "text": f"Ваш телеграм ID — <code>{user_id}</code>. Передайте его Роману.",
+                "keyboard": [[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]]
             }
 
         info_field = str(user_record.get("ИНФОРМАЦИЯ", "")).strip()
         if not info_field:
             return {
-                "has_access": True,
-                "message": "📭 Нет доступных данных."
+                "text": "📭 Нет доступных данных.",
+                "keyboard": [[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]]
             }
 
         target_ids = parse_id_ranges(info_field)
         if not target_ids:
             return {
-                "has_access": True,
-                "message": "⚠️ Не удалось распознать ID объектов."
+                "text": "⚠️ Не удалось распознать ID объектов.",
+                "keyboard": [[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]]
             }
 
-        # Составление карты объектов по ID
+        # Составить карту объектов
         obj_map = {}
         for r in records:
             try:
@@ -134,61 +124,90 @@ async def fetch_user_data(user_id: str) -> dict:
             except (ValueError, TypeError):
                 continue
 
-        # Формирование сообщения
-        messages = []
-        found = 0
+        # Формируем текст и кнопки
+        lines = []
+        buttons = []
+
+        found_any = False
         for obj_id in target_ids:
-            if obj_id in obj_map:
-                found += 1
-                obj = obj_map[obj_id]
-                messages.append(f"{obj['address']}\n<b>Код</b> <code>{obj['code']}</code>")
+            if obj_id not in obj_map:
+                continue
+            found_any = True
+            obj = obj_map[obj_id]
+            if obj_id == revealed_obj_id:
+                lines.append(f"{obj['address']}\n<b>Код</b>: <code>{obj['code']}</code>")
+                buttons.append([InlineKeyboardButton("Скрыть", callback_data=f"hide_{obj_id}")])
+            else:
+                lines.append(f"{obj['address']}\nКод: 🔒 Скрыт")
+                buttons.append([InlineKeyboardButton("Показать", callback_data=f"show_{obj_id}")])
 
-        if messages:
-            message = f"✅ Доступно кодов: {found}/{len(target_ids)}\n\n" + "\n\n".join(messages)
-        else:
-            message = "📭 Не найдено ни одного объекта по вашим ID."
+        if not found_any:
+            return {
+                "text": "📭 Не найдено ни одного объекта по вашим ID.",
+                "keyboard": [[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]]
+            }
 
-        return {
-            "has_access": True,
-            "message": message
-        }
+        full_text = "\n\n".join(lines)
+        # Добавляем кнопку обновления вниз
+        buttons.append([InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")])
+        return {"text": full_text, "keyboard": buttons}
 
     except Exception as e:
-        logger.error(f"Ошибка при получении данных: {e}")
+        logger.error(f"Ошибка при построении интерфейса: {e}")
         return {
-            "has_access": False,
-            "message": "❌ Ошибка сервера. Попробуйте позже."
+            "text": "❌ Ошибка сервера. Попробуйте позже.",
+            "keyboard": [[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]]
         }
 
-# === 6. Обработчики команд Telegram ===
+# === 5. Обработчики команд ===
 
-# Команда /start — загрузка данных пользователя
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     logger.info(f"🚀 Пользователь {user.id} (@{user.username}) запустил бота")
     await update.message.reply_text("Загружаю данные...", parse_mode="HTML")
-    result = await fetch_user_data(str(user.id))
+    ui = build_keyboard_and_text(str(user.id))
     await update.message.reply_text(
-        result["message"],
-        reply_markup=refresh_button(),
+        ui["text"],
+        reply_markup=InlineKeyboardMarkup(ui["keyboard"]),
         parse_mode="HTML"
     )
 
-# Обработка нажатия кнопки "Обновить"
 async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user = query.from_user
     logger.info(f"🔄 Пользователь {user.id} обновляет данные")
-    await query.edit_message_text("🔄 Обновляю...", parse_mode="HTML")
-    result = await fetch_user_data(str(user.id))
+    ui = build_keyboard_and_text(str(user.id))
     await query.edit_message_text(
-        result["message"],
-        reply_markup=refresh_button(),
+        ui["text"],
+        reply_markup=InlineKeyboardMarkup(ui["keyboard"]),
         parse_mode="HTML"
     )
 
-# === 7. Обработка ошибок Telegram API ===
+async def show_hide_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    data = query.data
+    user = query.from_user
+    user_id = str(user.id)
+
+    revealed_id = None
+    if data.startswith("show_"):
+        try:
+            revealed_id = int(data.split("_", 1)[1])
+        except ValueError:
+            pass
+    elif data.startswith("hide_"):
+        revealed_id = None  # скрываем всё
+    # Если "refresh" — уже обрабатывается другим хендлером
+
+    ui = build_keyboard_and_text(user_id, revealed_obj_id=revealed_id)
+    await query.edit_message_text(
+        ui["text"],
+        reply_markup=InlineKeyboardMarkup(ui["keyboard"]),
+        parse_mode="HTML"
+    )
+
+# === 6. Обработка ошибок ===
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}", exc_info=True)
     if update and update.effective_message:
@@ -197,21 +216,19 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-# === 8. Запуск бота через long polling (без вебхуков) ===
+# === 7. Запуск бота ===
 def main():
     logger.info("🚀 Запуск Telegram бота в режиме long polling...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # Регистрация обработчиков
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(refresh_callback, pattern="^refresh$"))
+    app.add_handler(CallbackQueryHandler(show_hide_callback, pattern="^(show_|hide_)"))
+
     app.add_error_handler(error_handler)
 
-    # Запуск бота без вебхуков — просто long polling
     app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
-
     logger.info("🛑 Бот остановлен.")
 
-# Точка входа
 if __name__ == "__main__":
     main()
