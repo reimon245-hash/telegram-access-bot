@@ -80,35 +80,31 @@ def parse_id_ranges(range_str: str):
             continue
     return sorted(ids)
 
-def truncate_address(address: str, max_length=60) -> str:
-    """Обрезает строку до max_length символов, добавляя '...' при необходимости."""
-    if not isinstance(address, str):
-        address = str(address)
-    if len(address) <= max_length:
-        return address
-    return address[:max_length - 3] + "..."
-
 def build_keyboard(obj_map, expanded_obj_id=None):
     buttons = []
+
+    # Раскрытая кнопка — всегда одна в строке
+    if expanded_obj_id is not None and expanded_obj_id in obj_map:
+        data = obj_map[expanded_obj_id]
+        text = f"{data['address']}\nКод: {data['code']}"
+        buttons.append([InlineKeyboardButton(text, callback_data=f"show_{expanded_obj_id}")])
+
+    # Свёрнутые кнопки — группируем по 2
+    folded_buttons = []
     for obj_id, data in obj_map.items():
-        address = data["address"]
-        code = data["code"]
         if obj_id == expanded_obj_id:
-            # Пытаемся показать полную информацию
-            full_text = f"{address}\nКод: {code}"
-            if len(full_text) > 64:
-                # Вычисляем, сколько символов можно оставить под адрес
-                code_part_len = len(f"\nКод: {code}")
-                available_for_addr = max(0, 64 - code_part_len - 3)
-                short_addr = truncate_address(address, available_for_addr)
-                full_text = f"{short_addr}\nКод: {code}"
-                if len(full_text) > 64:
-                    full_text = truncate_address(full_text, 64)
-            text = full_text
-        else:
-            text = truncate_address(address, 60)
-        buttons.append([InlineKeyboardButton(text, callback_data=f"show_{obj_id}")])
+            continue
+        text = data["address"]
+        folded_buttons.append(InlineKeyboardButton(text, callback_data=f"show_{obj_id}"))
+
+    COLS = 2
+    for i in range(0, len(folded_buttons), COLS):
+        row = folded_buttons[i:i + COLS]
+        buttons.append(row)
+
+    # Кнопка обновления — всегда внизу
     buttons.append([InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")])
+
     return InlineKeyboardMarkup(buttons)
 
 def build_no_access_keyboard():
@@ -148,7 +144,7 @@ async def fetch_user_objects(user_id: str):
         logger.error(f"Ошибка при получении данных: {e}")
         return None
 
-# === 6. Обработчики команд и колбэков ===
+# === 6. Обработчики ===
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
@@ -224,7 +220,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-# === 8. Запуск бота ===
+# === 8. Запуск ===
 def main():
     logger.info("🚀 Запуск Telegram бота в режиме long polling...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
