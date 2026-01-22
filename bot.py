@@ -149,51 +149,29 @@ async def fetch_user_objects(user_id: str):
         logger.error(f"Ошибка при получении данных: {e}")
         return None
 
-async def safe_delete_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
-    """Безопасное удаление сообщения (игнорирует ошибки)"""
-    try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
-    except BadRequest as e:
-        if "not found" not in str(e).lower() and "message to delete not found" not in str(e).lower():
-            logger.warning(f"Не удалось удалить сообщение {message_id}: {e}")
-
-async def send_main_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, reply_markup):
-    """Отправляет новое основное сообщение и удаляет старое"""
-    chat_id = update.effective_chat.id
-
-    # Удаляем предыдущее основное сообщение, если есть
-    old_msg_id = context.chat_data.get("main_message_id")
-    if old_msg_id:
-        await safe_delete_message(context, chat_id, old_msg_id)
-
-    # Отправляем новое
-    if update.callback_query:
-        msg = await update.callback_query.message.reply_text(text, reply_markup=reply_markup)
-    else:
-        msg = await update.message.reply_text(text, reply_markup=reply_markup)
-
-    # Сохраняем ID
-    context.chat_data["main_message_id"] = msg.message_id
-    return msg
+# === Обновлённые обработчики ===
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     logger.info(f"🚀 Пользователь {user.id} (@{user.username}) запустил бота")
 
+    # Отправляем временное сообщение
+    temp_msg = await update.message.reply_text("Загружаю данные...", reply_markup=build_no_access_keyboard())
+
     obj_map = await fetch_user_objects(str(user.id))
     if obj_map is None:
         text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
-        await send_main_message(update, context, text, build_no_access_keyboard())
+        await temp_msg.edit_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
         return
 
     if not obj_map:
-        await send_main_message(update, context, "📭 Нет доступных объектов.", build_no_access_keyboard())
+        await temp_msg.edit_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
         return
 
     context.chat_data["obj_map"] = obj_map
     context.chat_data["expanded"] = None
     keyboard = build_keyboard(obj_map)
-    await send_main_message(update, context, "Выберите объект:", keyboard)
+    await temp_msg.edit_text("Выберите объект:", reply_markup=keyboard)
 
 async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -204,17 +182,17 @@ async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     obj_map = await fetch_user_objects(str(user.id))
     if obj_map is None:
         text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
-        await send_main_message(update, context, text, build_no_access_keyboard())
+        await query.edit_message_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
         return
 
     if not obj_map:
-        await send_main_message(update, context, "📭 Нет доступных объектов.", build_no_access_keyboard())
+        await query.edit_message_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
         return
 
     context.chat_data["obj_map"] = obj_map
     context.chat_data["expanded"] = None
     keyboard = build_keyboard(obj_map)
-    await send_main_message(update, context, "Выберите объект:", keyboard)
+    await query.edit_message_text("Выберите объект:", reply_markup=keyboard)
 
 async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -222,17 +200,17 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     obj_map = context.chat_data.get("obj_map")
     if not obj_map:
-        await send_main_message(update, context, "⚠️ Данные устарели. Нажмите «ОБНОВИТЬ».", build_no_access_keyboard())
+        await query.edit_message_text("⚠️ Данные устарели. Нажмите «ОБНОВИТЬ».", reply_markup=build_no_access_keyboard())
         return
 
     try:
         obj_id = int(query.data.split("_", 1)[1])
     except (IndexError, ValueError):
-        await send_main_message(update, context, "❌ Некорректный запрос.", build_no_access_keyboard())
+        await query.edit_message_text("❌ Некорректный запрос.")
         return
 
     if obj_id not in obj_map:
-        await send_main_message(update, context, "❌ Объект не найден.", build_no_access_keyboard())
+        await query.edit_message_text("❌ Объект не найден.")
         return
 
     current_expanded = context.chat_data.get("expanded")
@@ -242,13 +220,7 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.chat_data["expanded"] = obj_id
 
     keyboard = build_keyboard(obj_map, expanded_obj_id=context.chat_data["expanded"])
-    # Обновляем ТОЛЬКО клавиатуру основного сообщения
-    try:
-        await query.edit_message_reply_markup(reply_markup=keyboard)
-    except BadRequest as e:
-        # Если сообщение уже удалено — отправим новое
-        logger.warning(f"Не удалось обновить клавиатуру: {e}")
-        await send_main_message(update, context, "Выберите объект:", keyboard)
+    await query.edit_message_reply_markup(reply_markup=keyboard)
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}", exc_info=True)
@@ -258,6 +230,7 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
+# === Запуск ===
 def main():
     logger.info("🚀 Запуск Telegram бота в режиме long polling...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
