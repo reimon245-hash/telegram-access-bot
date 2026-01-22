@@ -81,43 +81,39 @@ def parse_id_ranges(range_str: str):
             continue
     return sorted(ids)
 
-def build_message_and_keyboard(obj_map, target_ids, revealed_id=None):
-    """
-    Формирует текст сообщения и клавиатуру.
-    - obj_map: {id: {"address": ..., "code": ...}}
-    - target_ids: список ID, доступных пользователю
-    - revealed_id: ID, чей код сейчас показан (или None)
-    """
+def refresh_button():
+    return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
+
+def build_objects_list_message(objects, revealed_code_id=None):
+    """Формирует текст сообщения со списком адресов и, при необходимости, одним открытым кодом."""
+    if not objects:
+        return "📭 Нет доступных объектов."
+
     lines = []
-    buttons = []
-
-    for obj_id in target_ids:
-        obj = obj_map.get(obj_id)
-        if not obj:
-            continue
+    for obj in objects:
         address = obj["address"]
-        code = obj["code"]
+        lines.append(address)
+        if revealed_code_id == obj["id"]:
+            lines.append(f"🔑 Код: <code>{obj['code']}</code>")
+    return "\n".join(lines)
 
-        if obj_id == revealed_id:
-            lines.append(f"{address}\n<b>Код</b> <code>{code}</code>")
-            buttons.append(InlineKeyboardButton("Скрыть", callback_data=f"hide_{obj_id}"))
-        else:
-            lines.append(address)
-            buttons.append(InlineKeyboardButton("Показать код", callback_data=f"show_{obj_id}"))
+def build_inline_keyboard(objects, show_refresh=True):
+    """Создаёт кнопки 'Показать код' для каждого объекта + опционально кнопку обновления."""
+    buttons = []
+    for obj in objects:
+        buttons.append([
+            InlineKeyboardButton("Показать код", callback_data=f"show_{obj['id']}")
+        ])
+    if show_refresh:
+        buttons.append([InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")])
+    return InlineKeyboardMarkup(buttons)
 
-    text = "\n\n".join(lines) if lines else "📭 Нет доступных объектов."
-    # Одна строка кнопок — по одной на каждый объект
-    keyboard = [buttons] if buttons else []
-    return text, InlineKeyboardMarkup(keyboard)
-
-async def fetch_user_data_and_build_ui(user_id: str, revealed_id=None):
+# === 5. Получение данных пользователя из Google Sheets ===
+async def fetch_user_objects(user_id: str):
     """
-    Возвращает словарь:
-    - 'has_access': bool
-    - 'text': str
-    - 'reply_markup': InlineKeyboardMarkup или None
-    - 'target_ids': list (для внутреннего использования)
-    - 'obj_map': dict
+    Возвращает:
+      - {'has_access': False, 'message': ...} — если доступа нет
+      - {'has_access': True, 'objects': [...]} — если есть
     """
     try:
         sheet = GoogleSheetsClient().get_worksheet()
@@ -125,80 +121,84 @@ async def fetch_user_data_and_build_ui(user_id: str, revealed_id=None):
             expected_headers=["ID", "Адрес", "Код", "ДОСТУП", "Сотрудники по ID", "ИНФОРМАЦИЯ"]
         )
 
+        # Поиск записи по полю "ДОСТУП"
         user_record = next((r for r in records if str(r.get("ДОСТУП", "")).strip() == user_id), None)
         if not user_record:
             return {
                 "has_access": False,
-                "text": f"Ваш телеграм ID — <code>{user_id}</code>. Передайте его Роману.",
-                "reply_markup": InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]]),
-                "target_ids": [],
-                "obj_map": {}
+                "message": f"Ваш телеграм ID — <code>{user_id}</code>. Передайте его Роману."
             }
 
         info_field = str(user_record.get("ИНФОРМАЦИЯ", "")).strip()
+        if not info_field:
+            return {"has_access": True, "objects": []}
+
         target_ids = parse_id_ranges(info_field)
         if not target_ids:
-            return {
-                "has_access": True,
-                "text": "⚠️ Не удалось распознать ID объектов.",
-                "reply_markup": InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]]),
-                "target_ids": [],
-                "obj_map": {}
-            }
+            return {"has_access": True, "objects": []}
 
+        # Составление карты объектов по ID
         obj_map = {}
         for r in records:
             try:
                 obj_id = int(r.get("ID", 0))
                 if obj_id:
                     obj_map[obj_id] = {
-                        "address": r.get("Адрес", "Не указан"),
-                        "code": r.get("Код", "Не указан")
+                        "id": obj_id,
+                        "address": str(r.get("Адрес", "Не указан")).strip(),
+                        "code": str(r.get("Код", "Не указан")).strip()
                     }
             except (ValueError, TypeError):
                 continue
 
-        # Удаляем недоступные ID
-        valid_target_ids = [oid for oid in target_ids if oid in obj_map]
+        # Формируем список объектов в порядке target_ids
+        objects = []
+        for obj_id in target_ids:
+            if obj_id in obj_map:
+                objects.append(obj_map[obj_id])
 
-        if not valid_target_ids:
-            return {
-                "has_access": True,
-                "text": "📭 Не найдено ни одного объекта по вашим ID.",
-                "reply_markup": InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]]),
-                "target_ids": [],
-                "obj_map": {}
-            }
-
-        text, reply_markup = build_message_and_keyboard(obj_map, valid_target_ids, revealed_id=revealed_id)
-        return {
-            "has_access": True,
-            "text": text,
-            "reply_markup": reply_markup,
-            "target_ids": valid_target_ids,
-            "obj_map": obj_map
-        }
+        return {"has_access": True, "objects": objects}
 
     except Exception as e:
         logger.error(f"Ошибка при получении данных: {e}")
         return {
             "has_access": False,
-            "text": "❌ Ошибка сервера. Попробуйте позже.",
-            "reply_markup": InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]]),
-            "target_ids": [],
-            "obj_map": {}
+            "message": "❌ Ошибка сервера. Попробуйте позже."
         }
 
-# === 5. Обработчики ===
+# === 6. Обработчики ===
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     logger.info(f"🚀 Пользователь {user.id} (@{user.username}) запустил бота")
     await update.message.reply_text("Загружаю данные...", parse_mode="HTML")
-    result = await fetch_user_data_and_build_ui(str(user.id))
+
+    result = await fetch_user_objects(str(user.id))
+
+    if not result["has_access"]:
+        await update.message.reply_text(
+            result["message"],
+            reply_markup=refresh_button(),
+            parse_mode="HTML"
+        )
+        return
+
+    objects = result["objects"]
+    context.user_data["objects"] = objects
+
+    if not objects:
+        await update.message.reply_text(
+            "📭 Нет доступных объектов.",
+            reply_markup=refresh_button(),
+            parse_mode="HTML"
+        )
+        return
+
+    message_text = build_objects_list_message(objects)
+    keyboard = build_inline_keyboard(objects)
     await update.message.reply_text(
-        result["text"],
-        reply_markup=result["reply_markup"],
+        message_text,
+        reply_markup=keyboard,
         parse_mode="HTML"
     )
 
@@ -207,40 +207,67 @@ async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     user = query.from_user
     logger.info(f"🔄 Пользователь {user.id} обновляет данные")
-    result = await fetch_user_data_and_build_ui(str(user.id))
+    await query.edit_message_text("🔄 Обновляю...", parse_mode="HTML")
+
+    result = await fetch_user_objects(str(user.id))
+
+    if not result["has_access"]:
+        await query.edit_message_text(
+            result["message"],
+            reply_markup=refresh_button(),
+            parse_mode="HTML"
+        )
+        return
+
+    objects = result["objects"]
+    context.user_data["objects"] = objects
+
+    if not objects:
+        await query.edit_message_text(
+            "📭 Нет доступных объектов.",
+            reply_markup=refresh_button(),
+            parse_mode="HTML"
+        )
+        return
+
+    message_text = build_objects_list_message(objects)
+    keyboard = build_inline_keyboard(objects)
     await query.edit_message_text(
-        result["text"],
-        reply_markup=result["reply_markup"],
+        message_text,
+        reply_markup=keyboard,
         parse_mode="HTML"
     )
 
-async def show_hide_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    user = query.from_user
-    data = query.data
 
-    if data.startswith("show_"):
-        try:
-            obj_id = int(data.split("_", 1)[1])
-        except ValueError:
-            await query.edit_message_text("❌ Некорректный запрос.")
-            return
-        # Загружаем данные и открываем указанный код
-        result = await fetch_user_data_and_build_ui(str(user.id), revealed_id=obj_id)
-        await query.edit_message_text(
-            result["text"],
-            reply_markup=result["reply_markup"],
-            parse_mode="HTML"
-        )
-    elif data.startswith("hide_"):
-        # Просто обновляем без раскрытого кода
-        result = await fetch_user_data_and_build_ui(str(user.id))
-        await query.edit_message_text(
-            result["text"],
-            reply_markup=result["reply_markup"],
-            parse_mode="HTML"
-        )
+    # Извлекаем ID объекта из callback_data (формат: "show_123")
+    try:
+        obj_id = int(query.data.split("_", 1)[1])
+    except (IndexError, ValueError):
+        await query.edit_message_text("❌ Некорректный запрос.")
+        return
+
+    objects = context.user_data.get("objects", [])
+    if not objects:
+        await query.edit_message_text("📭 Данные устарели. Нажмите «ОБНОВИТЬ».", parse_mode="HTML")
+        return
+
+    # Проверяем, существует ли объект с таким ID
+    target_obj = next((obj for obj in objects if obj["id"] == obj_id), None)
+    if not target_obj:
+        await query.edit_message_text("❌ Объект не найден.", parse_mode="HTML")
+        return
+
+    # Формируем сообщение с открытым кодом только для этого объекта
+    message_text = build_objects_list_message(objects, revealed_code_id=obj_id)
+    keyboard = build_inline_keyboard(objects)  # те же кнопки, можно снова выбрать другой
+    await query.edit_message_text(
+        message_text,
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
 
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}", exc_info=True)
@@ -250,14 +277,14 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-# === 6. Запуск бота ===
+# === 7. Запуск бота ===
 def main():
     logger.info("🚀 Запуск Telegram бота в режиме long polling...")
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CallbackQueryHandler(refresh_callback, pattern="^refresh$"))
-    app.add_handler(CallbackQueryHandler(show_hide_callback, pattern="^(show_|hide_)"))
+    app.add_handler(CallbackQueryHandler(show_code_callback, pattern=r"^show_\d+$"))
     app.add_error_handler(error_handler)
 
     app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
