@@ -33,7 +33,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# === Google Sheets клиент (Singleton) ===
+# === Google Sheets клиент ===
 class GoogleSheetsClient:
     _instance = None
 
@@ -88,7 +88,6 @@ def build_keyboard(obj_map, expanded_obj_id=None):
     i = 0
     while i < len(all_ids):
         row = []
-        added_expanded = False
         for j in range(COLS):
             idx = i + j
             if idx >= len(all_ids):
@@ -96,20 +95,17 @@ def build_keyboard(obj_map, expanded_obj_id=None):
             obj_id = all_ids[idx]
             data = obj_map[obj_id]
 
+            # Формат кнопки: всегда компактный
             if obj_id == expanded_obj_id:
-                row = [InlineKeyboardButton(f"{data['address']}\nКод: {data['code']}", callback_data=f"show_{obj_id}")]
-                buttons.append(row)
-                added_expanded = True
-                break
+                # Показываем код прямо в кнопке (без жирного, но чётко)
+                button_text = f"{data['address']}\nКод: {data['code']}"
             else:
-                row.append(InlineKeyboardButton(data["address"], callback_data=f"show_{obj_id}"))
+                button_text = data["address"]
 
-        if added_expanded:
-            i += COLS
-        else:
-            if row:
-                buttons.append(row)
-            i += COLS
+            row.append(InlineKeyboardButton(button_text, callback_data=f"show_{obj_id}"))
+
+        buttons.append(row)
+        i += COLS
 
     buttons.append([InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")])
     return InlineKeyboardMarkup(buttons)
@@ -117,7 +113,7 @@ def build_keyboard(obj_map, expanded_obj_id=None):
 def build_no_access_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
 
-# === Получение данных из Google Sheets ===
+# === Получение данных ===
 async def fetch_user_objects(user_id: str):
     try:
         sheet = GoogleSheetsClient().get_worksheet()
@@ -244,7 +240,6 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         new_expanded = obj_id
 
-    # 🔥 Избегаем отправки идентичной клавиатуры
     if current_expanded == new_expanded:
         return
 
@@ -257,11 +252,9 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     error = context.error
     logger.error(f"Произошла ошибка: {error}", exc_info=True)
 
-    # Игнорируем безобидную ошибку "сообщение не изменилось"
     if "Message is not modified" in str(error):
         return
 
-    # Уведомляем только о реальных проблемах
     if update and update.effective_message:
         try:
             await update.effective_message.reply_text("❌ Произошла ошибка. Администратор уведомлён.")
