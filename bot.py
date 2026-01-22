@@ -96,8 +96,10 @@ def build_keyboard(obj_map, code_shown_obj_id=None):
             data = obj_map[obj_id]
 
             if obj_id == code_shown_obj_id:
-                button_text = f"Код: {data['code']}"
+                # Показываем код с эмодзи ключей
+                button_text = f"🔑 Код: {data['code']} 🔑"
             else:
+                # Показываем только адрес
                 button_text = data["address"]
 
             row.append(InlineKeyboardButton(button_text, callback_data=f"show_{obj_id}"))
@@ -237,7 +239,7 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         # Скрыть код → вернуться к адресу
         context.chat_data["code_shown"] = None
     else:
-        # Показать код этого объекта (и скрыть предыдущий)
+        # Показать код этого объекта
         context.chat_data["code_shown"] = obj_id
 
     keyboard = build_keyboard(obj_map, code_shown_obj_id=context.chat_data["code_shown"])
