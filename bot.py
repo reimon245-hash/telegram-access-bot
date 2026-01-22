@@ -33,7 +33,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# === Google Sheets клиент ===
+# === Google Sheets клиент (Singleton) ===
 class GoogleSheetsClient:
     _instance = None
 
@@ -58,6 +58,8 @@ class GoogleSheetsClient:
     def get_worksheet(self):
         sheet = self.client.open(GOOGLE_SHEET_NAME)
         return sheet.worksheet(WORKSHEET_NAME)
+
+# === Вспомогательные функции ===
 
 def parse_id_ranges(range_str: str):
     if not range_str or not isinstance(range_str, str):
@@ -86,18 +88,26 @@ def build_keyboard(obj_map, expanded_obj_id=None):
     i = 0
     while i < len(all_ids):
         row = []
+        added_expanded = False
         for j in range(COLS):
-            if i + j >= len(all_ids):
+            idx = i + j
+            if idx >= len(all_ids):
                 break
-            obj_id = all_ids[i + j]
+            obj_id = all_ids[idx]
             data = obj_map[obj_id]
+
             if obj_id == expanded_obj_id:
+                # Раскрытая кнопка — занимает всю строку
                 row = [InlineKeyboardButton(f"{data['address']}\nКод: {data['code']}", callback_data=f"show_{obj_id}")]
                 buttons.append(row)
-                i += COLS
+                added_expanded = True
                 break
             else:
                 row.append(InlineKeyboardButton(data["address"], callback_data=f"show_{obj_id}"))
+
+        if added_expanded:
+            # Пропускаем всю группу (2 позиции), даже если раскрытая была первой
+            i += COLS
         else:
             if row:
                 buttons.append(row)
@@ -109,6 +119,7 @@ def build_keyboard(obj_map, expanded_obj_id=None):
 def build_no_access_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
 
+# === Получение данных из Google Sheets ===
 async def fetch_user_objects(user_id: str):
     try:
         sheet = GoogleSheetsClient().get_worksheet()
@@ -142,39 +153,12 @@ async def fetch_user_objects(user_id: str):
         logger.error(f"Ошибка при получении данных: {e}")
         return None
 
-# Утилита: удалить временные сообщения
-async def cleanup_temp_messages(context: ContextTypes.DEFAULT_TYPE):
-    temp_msgs = context.chat_data.get("temp_messages", [])
-    chat_id = context._chat_id
-    for msg_id in temp_msgs:
-        try:
-            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except Exception as e:
-            logger.debug(f"Не удалось удалить сообщение {msg_id}: {e}")
-    context.chat_data["temp_messages"] = []
-
-# Отправить временное сообщение и запомнить его
-async def send_temp_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, **kwargs):
-    msg = await update.effective_chat.send_message(text, **kwargs)
-    if "temp_messages" not in context.chat_data:
-        context.chat_data["temp_messages"] = []
-    context.chat_data["temp_messages"].append(msg.message_id)
-    return msg
-
 # === Обработчики ===
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Очистка старых временных сообщений
-    await cleanup_temp_messages(context)
-
     user = update.effective_user
     logger.info(f"🚀 Пользователь {user.id} (@{user.username}) запустил бота")
-    
-    # Отправляем основное сообщение
     msg = await update.message.reply_text("Загружаю данные...", reply_markup=build_no_access_keyboard())
-    
-    # Сохраняем его как основное
-    context.chat_data["main_message_id"] = msg.message_id
 
     obj_map = await fetch_user_objects(str(user.id))
     if obj_map is None:
@@ -197,9 +181,6 @@ async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     logger.info(f"🔄 Пользователь {user.id} обновляет данные")
 
-    # Удаляем все временные сообщения
-    await cleanup_temp_messages(context)
-
     obj_map = await fetch_user_objects(str(user.id))
     if obj_map is None:
         text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
@@ -221,33 +202,36 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     obj_map = context.chat_data.get("obj_map")
     if not obj_map:
-        # Отправляем временное сообщение об ошибке
-        await send_temp_message(
-            update, context,
-            "⚠️ Данные устарели. Нажмите «ОБНОВИТЬ».",
-            reply_markup=build_no_access_keyboard()
-        )
+        await query.edit_message_text("⚠️ Данные устарели. Нажмите «ОБНОВИТЬ».", reply_markup=build_no_access_keyboard())
         return
 
     try:
         obj_id = int(query.data.split("_", 1)[1])
     except (IndexError, ValueError):
-        await send_temp_message(update, context, "❌ Некорректный запрос.")
+        await query.edit_message_text("❌ Некорректный запрос.")
         return
 
     if obj_id not in obj_map:
-        await send_temp_message(update, context, "❌ Объект не найден.")
+        await query.edit_message_text("❌ Объект не найден.")
         return
 
-    context.chat_data["expanded"] = obj_id
-    keyboard = build_keyboard(obj_map, expanded_obj_id=obj_id)
+    current_expanded = context.chat_data.get("expanded")
+    if current_expanded == obj_id:
+        # Сворачиваем, если уже открыт
+        context.chat_data["expanded"] = None
+    else:
+        # Раскрываем новый
+        context.chat_data["expanded"] = obj_id
+
+    keyboard = build_keyboard(obj_map, expanded_obj_id=context.chat_data["expanded"])
     await query.edit_message_reply_markup(reply_markup=keyboard)
 
+# === Обработка ошибок ===
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}", exc_info=True)
     if update and update.effective_message:
         try:
-            await send_temp_message(update, context, "❌ Произошла ошибка. Администратор уведомлён.")
+            await update.effective_message.reply_text("❌ Произошла ошибка. Администратор уведомлён.")
         except Exception:
             pass
 
