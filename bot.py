@@ -59,8 +59,6 @@ class GoogleSheetsClient:
         sheet = self.client.open(GOOGLE_SHEET_NAME)
         return sheet.worksheet(WORKSHEET_NAME)
 
-# === Вспомогательные функции ===
-
 def parse_id_ranges(range_str: str):
     if not range_str or not isinstance(range_str, str):
         return []
@@ -82,53 +80,6 @@ def parse_id_ranges(range_str: str):
 
 def build_keyboard(obj_map, expanded_obj_id=None):
     buttons = []
-
-    # Свёрнутые кнопки — группируем по 2
-    folded_buttons = []
-    for obj_id, data in obj_map.items():
-        if obj_id == expanded_obj_id:
-            continue
-        text = data["address"]
-        folded_buttons.append(InlineKeyboardButton(text, callback_data=f"show_{obj_id}"))
-
-    COLS = 2
-    for i in range(0, len(folded_buttons), COLS):
-        row = folded_buttons[i:i + COLS]
-        buttons.append(row)
-
-    # Раскрытая кнопка — вставляем на её **оригинальное место**
-    # Чтобы не прыгала, вставим её **туда, где она была в списке**
-    if expanded_obj_id is not None and expanded_obj_id in obj_map:
-        data = obj_map[expanded_obj_id]
-        expanded_button = InlineKeyboardButton(
-            f"{data['address']}\nКод: {data['code']}",
-            callback_data=f"show_{expanded_obj_id}"
-        )
-        # Найдём позицию объекта в исходном порядке
-        all_ids = list(obj_map.keys())
-        pos = all_ids.index(expanded_obj_id)
-        row_index = pos // COLS
-        col_index = pos % COLS
-
-        # Если в этой строке уже есть кнопки (например, вторая колонка),
-        # заменим нужную, или добавим новую строку
-        if row_index < len(buttons) and col_index < len(buttons[row_index]):
-            # Заменяем кнопку в существующей строке
-            buttons[row_index][col_index] = expanded_button
-        else:
-            # Добавляем как отдельную строку (если вышли за пределы)
-            buttons.insert(row_index, [expanded_button])
-
-    # Кнопка обновления — в самый низ
-    buttons.append([InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")])
-
-    return InlineKeyboardMarkup(buttons)
-
-# Альтернатива: проще и стабильнее — всегда вставлять раскрытую кнопку отдельной строкой,
-# но сохранять общий порядок. Ниже — упрощённая и более надёжная версия:
-
-def build_keyboard_simple(obj_map, expanded_obj_id=None):
-    buttons = []
     all_ids = list(obj_map.keys())
     COLS = 2
 
@@ -141,16 +92,13 @@ def build_keyboard_simple(obj_map, expanded_obj_id=None):
             obj_id = all_ids[i + j]
             data = obj_map[obj_id]
             if obj_id == expanded_obj_id:
-                # Раскрытая — занимает всю строку
                 row = [InlineKeyboardButton(f"{data['address']}\nКод: {data['code']}", callback_data=f"show_{obj_id}")]
                 buttons.append(row)
-                # Пропускаем остальные в этой "группе"
                 i += COLS
                 break
             else:
                 row.append(InlineKeyboardButton(data["address"], callback_data=f"show_{obj_id}"))
         else:
-            # Нормальная строка (без раскрытой)
             if row:
                 buttons.append(row)
             i += COLS
@@ -158,13 +106,9 @@ def build_keyboard_simple(obj_map, expanded_obj_id=None):
     buttons.append([InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")])
     return InlineKeyboardMarkup(buttons)
 
-# Используем упрощённую версию — она предсказуема и не ломает позицию сильно
-build_keyboard = build_keyboard_simple
-
 def build_no_access_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
 
-# === Получение данных ===
 async def fetch_user_objects(user_id: str):
     try:
         sheet = GoogleSheetsClient().get_worksheet()
@@ -198,12 +142,39 @@ async def fetch_user_objects(user_id: str):
         logger.error(f"Ошибка при получении данных: {e}")
         return None
 
+# Утилита: удалить временные сообщения
+async def cleanup_temp_messages(context: ContextTypes.DEFAULT_TYPE):
+    temp_msgs = context.chat_data.get("temp_messages", [])
+    chat_id = context._chat_id
+    for msg_id in temp_msgs:
+        try:
+            await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+        except Exception as e:
+            logger.debug(f"Не удалось удалить сообщение {msg_id}: {e}")
+    context.chat_data["temp_messages"] = []
+
+# Отправить временное сообщение и запомнить его
+async def send_temp_message(update: Update, context: ContextTypes.DEFAULT_TYPE, text: str, **kwargs):
+    msg = await update.effective_chat.send_message(text, **kwargs)
+    if "temp_messages" not in context.chat_data:
+        context.chat_data["temp_messages"] = []
+    context.chat_data["temp_messages"].append(msg.message_id)
+    return msg
+
 # === Обработчики ===
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Очистка старых временных сообщений
+    await cleanup_temp_messages(context)
+
     user = update.effective_user
     logger.info(f"🚀 Пользователь {user.id} (@{user.username}) запустил бота")
+    
+    # Отправляем основное сообщение
     msg = await update.message.reply_text("Загружаю данные...", reply_markup=build_no_access_keyboard())
+    
+    # Сохраняем его как основное
+    context.chat_data["main_message_id"] = msg.message_id
 
     obj_map = await fetch_user_objects(str(user.id))
     if obj_map is None:
@@ -226,6 +197,9 @@ async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = query.from_user
     logger.info(f"🔄 Пользователь {user.id} обновляет данные")
 
+    # Удаляем все временные сообщения
+    await cleanup_temp_messages(context)
+
     obj_map = await fetch_user_objects(str(user.id))
     if obj_map is None:
         text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
@@ -247,30 +221,33 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     obj_map = context.chat_data.get("obj_map")
     if not obj_map:
-        await query.edit_message_text("⚠️ Данные устарели. Нажмите «ОБНОВИТЬ».", reply_markup=build_no_access_keyboard())
+        # Отправляем временное сообщение об ошибке
+        await send_temp_message(
+            update, context,
+            "⚠️ Данные устарели. Нажмите «ОБНОВИТЬ».",
+            reply_markup=build_no_access_keyboard()
+        )
         return
 
     try:
         obj_id = int(query.data.split("_", 1)[1])
     except (IndexError, ValueError):
-        await query.edit_message_text("❌ Некорректный запрос.")
+        await send_temp_message(update, context, "❌ Некорректный запрос.")
         return
 
     if obj_id not in obj_map:
-        await query.edit_message_text("❌ Объект не найден.")
+        await send_temp_message(update, context, "❌ Объект не найден.")
         return
 
     context.chat_data["expanded"] = obj_id
     keyboard = build_keyboard(obj_map, expanded_obj_id=obj_id)
-    # Меняем ТОЛЬКО клавиатуру, текст остаётся "Выберите объект:"
     await query.edit_message_reply_markup(reply_markup=keyboard)
 
-# === Обработка ошибок ===
 async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}", exc_info=True)
     if update and update.effective_message:
         try:
-            await update.effective_message.reply_text("❌ Произошла ошибка. Администратор уведомлён.")
+            await send_temp_message(update, context, "❌ Произошла ошибка. Администратор уведомлён.")
         except Exception:
             pass
 
