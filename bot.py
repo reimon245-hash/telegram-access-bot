@@ -247,7 +247,8 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Ошибка: {context.error}", exc_info=True)
     if update and update.effective_message:
         try:
-            await update.effective_message.reply_text("❌ Произошла ошибка. Администратор уведомлён.")
+            # Для отладки: показываем саму ошибку
+            await update.effective_message.reply_text(f"❌ Ошибка: {str(context.error)[:500]}")
         except Exception:
             pass
 
@@ -266,3 +267,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
