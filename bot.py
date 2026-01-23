@@ -2,6 +2,7 @@ import os
 import sys
 import json
 import logging
+import asyncio
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -96,10 +97,8 @@ def build_keyboard(obj_map, code_shown_obj_id=None):
             data = obj_map[obj_id]
 
             if obj_id == code_shown_obj_id:
-                # Показываем код с эмодзи ключей
                 button_text = f"🔑 Код: {data['code']} 🔑"
             else:
-                # Показываем только адрес
                 button_text = data["address"]
 
             row.append(InlineKeyboardButton(button_text, callback_data=f"show_{obj_id}"))
@@ -112,6 +111,25 @@ def build_keyboard(obj_map, code_shown_obj_id=None):
 
 def build_no_access_keyboard():
     return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
+
+# === Фоновая задача: скрыть код через N секунд ===
+async def auto_hide_code(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
+    await asyncio.sleep(5)  # 5 секунд
+    try:
+        # Проверяем, всё ещё ли нужно скрывать
+        if context.chat_data.get("code_shown") is not None:
+            context.chat_data["code_shown"] = None
+            obj_map = context.chat_data.get("obj_map")
+            if obj_map:
+                keyboard = build_keyboard(obj_map)
+                await context.bot.edit_message_reply_markup(
+                    chat_id=chat_id,
+                    message_id=message_id,
+                    reply_markup=keyboard
+                )
+    except Exception as e:
+        # Игнорируем ошибки (сообщение могло быть удалено и т.п.)
+        logger.debug(f"Авто-скрытие кода: {e}")
 
 # === Получение данных из Google Sheets ===
 async def fetch_user_objects(user_id: str):
@@ -175,6 +193,12 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     context.chat_data["obj_map"] = obj_map
     context.chat_data["code_shown"] = None
+    # Отменяем старый таймер, если был
+    old_task = context.chat_data.get("hide_task")
+    if old_task and not old_task.done():
+        old_task.cancel()
+    context.chat_data["hide_task"] = None
+
     keyboard = build_keyboard(obj_map)
     await msg.edit_text("Выберите объект:", reply_markup=keyboard)
 
@@ -191,16 +215,29 @@ async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
         context.chat_data.pop("obj_map", None)
         context.chat_data.pop("code_shown", None)
+        old_task = context.chat_data.get("hide_task")
+        if old_task and not old_task.done():
+            old_task.cancel()
+        context.chat_data["hide_task"] = None
         return
 
     if not obj_map:
         await query.edit_message_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
         context.chat_data.pop("obj_map", None)
         context.chat_data.pop("code_shown", None)
+        old_task = context.chat_data.get("hide_task")
+        if old_task and not old_task.done():
+            old_task.cancel()
+        context.chat_data["hide_task"] = None
         return
 
     context.chat_data["obj_map"] = obj_map
     context.chat_data["code_shown"] = None
+    old_task = context.chat_data.get("hide_task")
+    if old_task and not old_task.done():
+        old_task.cancel()
+    context.chat_data["hide_task"] = None
+
     keyboard = build_keyboard(obj_map)
     await query.edit_message_text("Выберите объект:", reply_markup=keyboard)
 
@@ -235,12 +272,25 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     current_code_shown = context.chat_data.get("code_shown")
+    old_task = context.chat_data.get("hide_task")
+
     if current_code_shown == obj_id:
-        # Скрыть код → вернуться к адресу
+        # Пользователь хочет скрыть вручную — отменяем таймер
+        if old_task and not old_task.done():
+            old_task.cancel()
         context.chat_data["code_shown"] = None
+        context.chat_data["hide_task"] = None
     else:
-        # Показать код этого объекта
+        # Показываем новый код
         context.chat_data["code_shown"] = obj_id
+        # Отменяем предыдущий таймер
+        if old_task and not old_task.done():
+            old_task.cancel()
+        # Запускаем новый таймер
+        task = asyncio.create_task(
+            auto_hide_code(context, query.message.chat_id, query.message.message_id)
+        )
+        context.chat_data["hide_task"] = task
 
     keyboard = build_keyboard(obj_map, code_shown_obj_id=context.chat_data["code_shown"])
     await query.edit_message_reply_markup(reply_markup=keyboard)
