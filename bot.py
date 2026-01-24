@@ -119,12 +119,20 @@ async def show_no_access_message(query_or_msg, user_id):
     else:
         await query_or_msg.reply_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
 
+# === Фоновая задача: удалить сообщение с деталями ===
+async def delete_details_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int):
+    await asyncio.sleep(20)  # 20 секунд
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception as e:
+        logger.debug(f"Не удалось удалить сообщение с деталями: {e}")
+
 # === Получение данных из Google Sheets ===
 async def fetch_user_objects(user_id: str):
     try:
         sheet = GoogleSheetsClient().get_worksheet()
         records = sheet.get_all_records(
-            expected_headers=["ID", "Адрес", "Код", "ДОСТУП", "Сотрудники по ID", "ИНФОРМАЦИЯ"]
+            expected_headers=["ID", "Адрес", "Код", "ДОСТУП", "Сотрудники по ID", "ИНФОРМАЦИЯ", "ДЕТАЛИ"]
         )
 
         user_record = None
@@ -152,7 +160,14 @@ async def fetch_user_objects(user_id: str):
                 if obj_id in target_ids:
                     address = r.get("Адрес") or "Не указан"
                     code = r.get("Код") or "Не указан"
-                    obj_map[obj_id] = {"address": str(address), "code": str(code)}
+                    details = r.get("ДЕТАЛИ") or (
+                        "ℹ️ Дополнительная информация недоступна."
+                    )
+                    obj_map[obj_id] = {
+                        "address": str(address),
+                        "code": str(code),
+                        "details": str(details)
+                    }
             except (ValueError, TypeError, AttributeError):
                 continue
 
@@ -166,7 +181,6 @@ async def fetch_user_objects(user_id: str):
 async def auto_hide_code(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, obj_id: int):
     await asyncio.sleep(5)
     try:
-        # Проверяем, всё ещё ли этот код должен быть скрыт
         if context.chat_data.get("code_shown") == obj_id:
             context.chat_data["code_shown"] = None
             obj_map = context.chat_data.get("obj_map")
@@ -203,6 +217,15 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         old_task.cancel()
     context.chat_data["hide_task"] = None
 
+    # Отменяем старое сообщение с деталями (если было)
+    old_detail_msg = context.chat_data.get("details_msg_id")
+    if old_detail_msg:
+        try:
+            await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=old_detail_msg)
+        except:
+            pass
+        context.chat_data["details_msg_id"] = None
+
     keyboard = build_keyboard(obj_map)
     await msg.edit_text("Выберите объект:", reply_markup=keyboard)
 
@@ -231,6 +254,15 @@ async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         old_task.cancel()
     context.chat_data["hide_task"] = None
 
+    # Удаляем старое сообщение с деталями
+    old_detail_msg = context.chat_data.get("details_msg_id")
+    if old_detail_msg:
+        try:
+            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=old_detail_msg)
+        except:
+            pass
+        context.chat_data["details_msg_id"] = None
+
     keyboard = build_keyboard(obj_map)
     await query.edit_message_text("Выберите объект:", reply_markup=keyboard)
 
@@ -240,10 +272,9 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     user = query.from_user
     user_id = str(user.id)
 
-    # 🔒 КРИТИЧЕСКАЯ ПРОВЕРКА: есть ли сейчас доступ?
+    # 🔒 Проверка доступа при каждом нажатии
     obj_map = await fetch_user_objects(user_id)
     if obj_map is None:
-        # Доступа нет — ведём себя как при /start без доступа
         await show_no_access_message(query, user_id)
         context.chat_data.clear()
         return
@@ -253,7 +284,6 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.chat_data.clear()
         return
 
-    # Сохраняем актуальные данные
     context.chat_data["obj_map"] = obj_map
 
     try:
@@ -269,14 +299,23 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     current_code_shown = context.chat_data.get("code_shown")
     old_task = context.chat_data.get("hide_task")
 
+    # Удаляем предыдущее сообщение с деталями
+    old_detail_msg_id = context.chat_data.get("details_msg_id")
+    if old_detail_msg_id:
+        try:
+            await context.bot.delete_message(chat_id=query.message.chat_id, message_id=old_detail_msg_id)
+        except:
+            pass
+        context.chat_data["details_msg_id"] = None
+
     if current_code_shown == obj_id:
-        # Скрыть вручную
+        # Скрыть код
         if old_task and not old_task.done():
             old_task.cancel()
         context.chat_data["code_shown"] = None
         context.chat_data["hide_task"] = None
     else:
-        # Показать код
+        # Показать код + отправить детали
         context.chat_data["code_shown"] = obj_id
         if old_task and not old_task.done():
             old_task.cancel()
@@ -284,6 +323,22 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             auto_hide_code(context, query.message.chat_id, query.message.message_id, obj_id)
         )
         context.chat_data["hide_task"] = task
+
+        # Отправляем детали
+        details_text = obj_map[obj_id]["details"]
+        try:
+            sent_msg = await context.bot.send_message(
+                chat_id=query.message.chat_id,
+                text=details_text,
+                disable_web_page_preview=False
+            )
+            context.chat_data["details_msg_id"] = sent_msg.message_id
+            # Запускаем удаление через 20 сек
+            asyncio.create_task(
+                delete_details_message(context, query.message.chat_id, sent_msg.message_id)
+            )
+        except Exception as e:
+            logger.error(f"Не удалось отправить детали: {e}")
 
     keyboard = build_keyboard(obj_map, code_shown_obj_id=context.chat_data["code_shown"])
     await query.edit_message_reply_markup(reply_markup=keyboard)
