@@ -84,41 +84,27 @@ def parse_id_ranges(range_str: str):
 def build_keyboard(obj_map, code_shown_obj_id=None):
     buttons = []
     all_ids = list(obj_map.keys())
-    MAX_HALF_WIDTH_CHARS = 19  # 🔧 Изменено: 19 символов
+    COLS = 2
 
     i = 0
     while i < len(all_ids):
-        obj_id = all_ids[i]
-        data = obj_map[obj_id]
+        row = []
+        for j in range(COLS):
+            idx = i + j
+            if idx >= len(all_ids):
+                break
+            obj_id = all_ids[idx]
+            data = obj_map[obj_id]
 
-        if obj_id == code_shown_obj_id:
-            button_text = f"🔑 Код: {data['code']} 🔑"
-        else:
-            button_text = data["address"]
-
-        # Если текст ДЛИННЕЕ 19 символов — на всю ширину
-        if len(button_text) > MAX_HALF_WIDTH_CHARS:
-            buttons.append([InlineKeyboardButton(button_text, callback_data=f"show_{obj_id}")])
-            i += 1
-        else:
-            # Пытаемся добавить вторую кнопку
-            row = [InlineKeyboardButton(button_text, callback_data=f"show_{obj_id}")]
-            if i + 1 < len(all_ids):
-                next_obj_id = all_ids[i + 1]
-                next_data = obj_map[next_obj_id]
-                if next_obj_id == code_shown_obj_id:
-                    next_text = f"🔑 Код: {next_data['code']} 🔑"
-                else:
-                    next_text = next_data["address"]
-
-                if len(next_text) <= MAX_HALF_WIDTH_CHARS:
-                    row.append(InlineKeyboardButton(next_text, callback_data=f"show_{next_obj_id}"))
-                    i += 2
-                else:
-                    i += 1
+            if obj_id == code_shown_obj_id:
+                button_text = f"🔑 Код: {data['code']} 🔑"
             else:
-                i += 1
-            buttons.append(row)
+                button_text = data["address"]
+
+            row.append(InlineKeyboardButton(button_text, callback_data=f"show_{obj_id}"))
+
+        buttons.append(row)
+        i += COLS
 
     buttons.append([InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")])
     return InlineKeyboardMarkup(buttons)
@@ -183,7 +169,7 @@ async def fetch_user_objects(user_id: str):
 
 # === Фоновая задача: скрыть код через 7 минут ===
 async def auto_hide_code(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, obj_id: int):
-    await asyncio.sleep(420)  # 7 минут = 420 секунд
+    await asyncio.sleep(420)  # ⏱️ 7 минут = 420 секунд
     try:
         if context.chat_data.get("code_shown") == obj_id:
             context.chat_data["code_shown"] = None
@@ -262,7 +248,7 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     # 🔒 Проверка доступа при каждом нажатии
     obj_map = await fetch_user_objects(user_id)
     if obj_map is None:
-        await show_no_access_message(query, user.id)
+        await show_no_access_message(query, user_id)
         context.chat_data.clear()
         return
 
