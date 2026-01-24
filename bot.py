@@ -84,7 +84,7 @@ def parse_id_ranges(range_str: str):
 def build_keyboard(obj_map, code_shown_obj_id=None):
     buttons = []
     all_ids = list(obj_map.keys())
-    MAX_HALF_WIDTH_CHARS = 17  # ← изменено с 20 на 17
+    MAX_HALF_WIDTH_CHARS = 19  # 🔧 Изменено: 19 символов
 
     i = 0
     while i < len(all_ids):
@@ -96,12 +96,12 @@ def build_keyboard(obj_map, code_shown_obj_id=None):
         else:
             button_text = data["address"]
 
-        # Если текст длиннее 17 символов — кнопка на всю ширину
+        # Если текст ДЛИННЕЕ 19 символов — на всю ширину
         if len(button_text) > MAX_HALF_WIDTH_CHARS:
             buttons.append([InlineKeyboardButton(button_text, callback_data=f"show_{obj_id}")])
             i += 1
         else:
-            # Пытаемся добавить вторую кнопку в строку
+            # Пытаемся добавить вторую кнопку
             row = [InlineKeyboardButton(button_text, callback_data=f"show_{obj_id}")]
             if i + 1 < len(all_ids):
                 next_obj_id = all_ids[i + 1]
