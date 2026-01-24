@@ -84,7 +84,7 @@ def parse_id_ranges(range_str: str):
 def build_keyboard(obj_map, code_shown_obj_id=None):
     buttons = []
     all_ids = list(obj_map.keys())
-    MAX_HALF_WIDTH_CHARS = 20  # Порог для половинной ширины
+    MAX_HALF_WIDTH_CHARS = 17  # ← изменено с 20 на 17
 
     i = 0
     while i < len(all_ids):
@@ -96,12 +96,12 @@ def build_keyboard(obj_map, code_shown_obj_id=None):
         else:
             button_text = data["address"]
 
-        # Если текст длинный — кнопка на всю ширину
+        # Если текст длиннее 17 символов — кнопка на всю ширину
         if len(button_text) > MAX_HALF_WIDTH_CHARS:
             buttons.append([InlineKeyboardButton(button_text, callback_data=f"show_{obj_id}")])
             i += 1
         else:
-            # Пытаемся добавить вторую кнопку, если есть и она тоже короткая
+            # Пытаемся добавить вторую кнопку в строку
             row = [InlineKeyboardButton(button_text, callback_data=f"show_{obj_id}")]
             if i + 1 < len(all_ids):
                 next_obj_id = all_ids[i + 1]
@@ -183,7 +183,7 @@ async def fetch_user_objects(user_id: str):
 
 # === Фоновая задача: скрыть код через 7 минут ===
 async def auto_hide_code(context: ContextTypes.DEFAULT_TYPE, chat_id: int, message_id: int, obj_id: int):
-    await asyncio.sleep(420)  # ⏱️ 7 минут = 420 секунд
+    await asyncio.sleep(420)  # 7 минут = 420 секунд
     try:
         if context.chat_data.get("code_shown") == obj_id:
             context.chat_data["code_shown"] = None
