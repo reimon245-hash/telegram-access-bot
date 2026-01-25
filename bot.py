@@ -81,43 +81,42 @@ def parse_id_ranges(range_str: str):
             continue
     return sorted(ids)
 
-def build_keyboard(obj_map, code_shown_obj_id=None):
+def build_keyboard(obj_map=None, code_shown_obj_id=None):
     buttons = []
-    all_ids = list(obj_map.keys())
-    COLS = 2
+    if obj_map is not None:
+        all_ids = list(obj_map.keys())
+        COLS = 2
+        i = 0
+        while i < len(all_ids):
+            row = []
+            for j in range(COLS):
+                idx = i + j
+                if idx >= len(all_ids):
+                    break
+                obj_id = all_ids[idx]
+                data = obj_map[obj_id]
 
-    i = 0
-    while i < len(all_ids):
-        row = []
-        for j in range(COLS):
-            idx = i + j
-            if idx >= len(all_ids):
-                break
-            obj_id = all_ids[idx]
-            data = obj_map[obj_id]
+                if obj_id == code_shown_obj_id:
+                    button_text = f"🔑 Код: {data['code']} 🔑"
+                else:
+                    button_text = data["address_short"]
 
-            if obj_id == code_shown_obj_id:
-                button_text = f"🔑 Код: {data['code']} 🔑"
-            else:
-                button_text = data["address_short"]
+                row.append(InlineKeyboardButton(button_text, callback_data=f"show_{obj_id}"))
 
-            row.append(InlineKeyboardButton(button_text, callback_data=f"show_{obj_id}"))
+            buttons.append(row)
+            i += COLS
 
-        buttons.append(row)
-        i += COLS
-
+    # Кнопка ОБНОВИТЬ — всегда внизу
     buttons.append([InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")])
     return InlineKeyboardMarkup(buttons)
 
-def build_no_access_keyboard():
-    return InlineKeyboardMarkup([[InlineKeyboardButton("🔄 ОБНОВИТЬ", callback_data="refresh")]])
-
 async def show_no_access_message(query_or_msg, user_id):
     text = f"Ваш телеграм ID — <code>{user_id}</code>. Передайте его Роману."
+    reply_markup = build_keyboard()  # ← всегда с кнопкой ОБНОВИТЬ
     if hasattr(query_or_msg, 'edit_message_text'):
-        await query_or_msg.edit_message_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
+        await query_or_msg.edit_message_text(text, reply_markup=reply_markup, parse_mode="HTML")
     else:
-        await query_or_msg.reply_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
+        await query_or_msg.reply_text(text, reply_markup=reply_markup, parse_mode="HTML")
 
 # === Получение данных из Google Sheets ===
 async def fetch_user_objects(user_id: str):
@@ -198,14 +197,13 @@ async def auto_hide_code(context: ContextTypes.DEFAULT_TYPE, chat_id: int, messa
         if context.chat_data.get("code_shown") == obj_id:
             context.chat_data["code_shown"] = None
             obj_map = context.chat_data.get("obj_map")
-            if obj_map:
-                keyboard = build_keyboard(obj_map)
-                await context.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    text="Выберите объект:",
-                    reply_markup=keyboard
-                )
+            keyboard = build_keyboard(obj_map)
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=message_id,
+                text="Выберите объект:",
+                reply_markup=keyboard
+            )
     except Exception as e:
         logger.debug(f"Авто-скрытие кода: {e}")
 
@@ -218,11 +216,11 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     obj_map = await fetch_user_objects(str(user.id))
     if obj_map is None:
         text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
-        await update.message.reply_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
+        await update.message.reply_text(text, reply_markup=build_keyboard(), parse_mode="HTML")
         return
 
     if not obj_map:
-        await update.message.reply_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
+        await update.message.reply_text("📭 Нет доступных объектов.", reply_markup=build_keyboard())
         return
 
     context.chat_data["obj_map"] = obj_map
@@ -245,12 +243,12 @@ async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if obj_map is None:
         text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
-        await query.edit_message_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
+        await query.edit_message_text(text, reply_markup=build_keyboard(), parse_mode="HTML")
         context.chat_data.clear()
         return
 
     if not obj_map:
-        await query.edit_message_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
+        await query.edit_message_text("📭 Нет доступных объектов.", reply_markup=build_keyboard())
         context.chat_data.clear()
         return
 
@@ -273,12 +271,12 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     obj_map = await fetch_user_objects(user_id)
     if obj_map is None:
         text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
-        await query.edit_message_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
+        await query.edit_message_text(text, reply_markup=build_keyboard(), parse_mode="HTML")
         context.chat_data.clear()
         return
 
     if not obj_map:
-        await query.edit_message_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
+        await query.edit_message_text("📭 Нет доступных объектов.", reply_markup=build_keyboard())
         context.chat_data.clear()
         return
 
@@ -287,18 +285,17 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     try:
         obj_id = int(query.data.split("_", 1)[1])
     except (IndexError, ValueError):
-        await query.edit_message_text("❌ Некорректный запрос.")
+        await query.edit_message_text("❌ Некорректный запрос.", reply_markup=build_keyboard())
         return
 
     if obj_id not in obj_map:
-        await query.edit_message_text("❌ Объект не найден.")
+        await query.edit_message_text("❌ Объект не найден.", reply_markup=build_keyboard())
         return
 
     current_code_shown = context.chat_data.get("code_shown")
     old_task = context.chat_data.get("hide_task")
 
     if current_code_shown == obj_id:
-        # Скрыть: вернуть "Выберите объект:"
         if old_task and not old_task.done():
             old_task.cancel()
         context.chat_data["code_shown"] = None
@@ -309,7 +306,6 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             reply_markup=keyboard
         )
     else:
-        # Показать: только полный адрес (без "Выберите объект:" и без префикса)
         if old_task and not old_task.done():
             old_task.cancel()
         task = asyncio.create_task(
@@ -321,7 +317,7 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         address_full = obj_map[obj_id]["address_full"]
         keyboard = build_keyboard(obj_map, code_shown_obj_id=obj_id)
         await query.edit_message_text(
-            text=address_full,  # ← Только адрес, без лишнего текста
+            text=address_full,
             reply_markup=keyboard,
             parse_mode="HTML"
         )
@@ -334,9 +330,13 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if "Message is not modified" in str(error):
         return
 
+    # Всегда показываем кнопку ОБНОВИТЬ даже при ошибках
     if update and update.effective_message:
         try:
-            await update.effective_message.reply_text("❌ Произошла ошибка. Администратор уведомлён.")
+            await update.effective_message.reply_text(
+                "❌ Произошла ошибка. Администратор уведомлён.",
+                reply_markup=build_keyboard()
+            )
         except Exception:
             pass
 
