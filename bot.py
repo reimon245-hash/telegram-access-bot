@@ -119,7 +119,7 @@ async def show_no_access_message(query_or_msg, user_id):
     else:
         await query_or_msg.reply_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
 
-# === Получение данных из Google Sheets (без дубликатов) ===
+# === Получение данных из Google Sheets ===
 async def fetch_user_objects(user_id: str):
     try:
         sheet = GoogleSheetsClient().get_worksheet()
@@ -298,6 +298,7 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
     old_task = context.chat_data.get("hide_task")
 
     if current_code_shown == obj_id:
+        # Скрыть: вернуть "Выберите объект:"
         if old_task and not old_task.done():
             old_task.cancel()
         context.chat_data["code_shown"] = None
@@ -308,6 +309,7 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
             reply_markup=keyboard
         )
     else:
+        # Показать: только полный адрес (без "Выберите объект:" и без префикса)
         if old_task and not old_task.done():
             old_task.cancel()
         task = asyncio.create_task(
@@ -319,7 +321,7 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         address_full = obj_map[obj_id]["address_full"]
         keyboard = build_keyboard(obj_map, code_shown_obj_id=obj_id)
         await query.edit_message_text(
-            text=f"Выберите объект:\n\n{address_full}",
+            text=address_full,  # ← Только адрес, без лишнего текста
             reply_markup=keyboard,
             parse_mode="HTML"
         )
