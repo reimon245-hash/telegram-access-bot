@@ -319,7 +319,7 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         address_full = obj_map[obj_id]["address_full"]
         keyboard = build_keyboard(obj_map, code_shown_obj_id=obj_id)
         await query.edit_message_text(
-            text=f"Выберите объект:\n\n📍 <b>Адрес:</b> {address_full}",
+            text=f"Выберите объект:\n\n{address_full}",
             reply_markup=keyboard,
             parse_mode="HTML"
         )
