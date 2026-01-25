@@ -123,16 +123,39 @@ async def show_no_access_message(query_or_msg, user_id):
 async def fetch_user_objects(user_id: str):
     try:
         sheet = GoogleSheetsClient().get_worksheet()
-        # Указываем точные заголовки в порядке таблицы (пустые колонки игнорируем)
-        records = sheet.get_all_records(
-            expected_headers=[
-                "ID объекта", "Адрес короткий", "Адрес полный", "Код от сейфа", "Особенности",
-                "Пусто", "ДОСТУП", "Сотрудники по ID", "ИНФОРМАЦИЯ", "Пусто",
-                "Кодовое имя", "Банк", "ФИО", "Номер карты", "Номер СБП",
-                "Пусто", "Менеджеры", "Ссылка на чат"
-            ]
-        )
+        # Получаем все строки как списки значений
+        all_values = sheet.get_all_values()
+        if not all_values:
+            return None
 
+        headers = all_values[0]  # первая строка — заголовки
+        records = []
+
+        # Находим индексы нужных колонок
+        try:
+            idx_id = headers.index("ID объекта")
+            idx_addr_short = headers.index("Адрес короткий")
+            idx_code = headers.index("Код от сейфа")
+            idx_features = headers.index("Особенности")
+            idx_access = headers.index("ДОСТУП")
+            idx_info = headers.index("ИНФОРМАЦИЯ")
+        except ValueError as e:
+            logger.error(f"Не найдена колонка в таблице: {e}")
+            return None
+
+        # Обрабатываем строки данных
+        for row in all_values[1:]:
+            record = {
+                "ID объекта": row[idx_id] if idx_id < len(row) else "",
+                "Адрес короткий": row[idx_addr_short] if idx_addr_short < len(row) else "",
+                "Код от сейфа": row[idx_code] if idx_code < len(row) else "",
+                "Особенности": row[idx_features] if idx_features < len(row) else "",
+                "ДОСТУП": row[idx_access] if idx_access < len(row) else "",
+                "ИНФОРМАЦИЯ": row[idx_info] if idx_info < len(row) else "",
+            }
+            records.append(record)
+
+        # Ищем запись с доступом
         user_record = None
         for r in records:
             access_field = str(r.get("ДОСТУП", "")).strip()
@@ -333,3 +356,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
