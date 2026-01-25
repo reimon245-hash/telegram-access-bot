@@ -219,15 +219,15 @@ async def auto_hide_code(context: ContextTypes.DEFAULT_TYPE, chat_id: int, messa
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     logger.info(f"🚀 Пользователь {user.id} (@{user.username}) запустил бота")
-    msg = await update.message.reply_text("Загружаю данные...", reply_markup=build_no_access_keyboard())
 
     obj_map = await fetch_user_objects(str(user.id))
     if obj_map is None:
-        await show_no_access_message(msg, user.id)
+        text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
+        await update.message.reply_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
         return
 
     if not obj_map:
-        await msg.edit_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
+        await update.message.reply_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
         return
 
     context.chat_data["obj_map"] = obj_map
@@ -238,7 +238,37 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.chat_data["hide_task"] = None
 
     keyboard = build_keyboard(obj_map)
-    await msg.edit_text("Выберите объект:", reply_markup=keyboard)
+    await update.message.reply_text("Выберите объект:", reply_markup=keyboard)
+
+
+async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    user = query.from_user
+    logger.info(f"🔄 Пользователь {user.id} нажал «ОБНОВИТЬ»")
+
+    obj_map = await fetch_user_objects(str(user.id))
+
+    if obj_map is None:
+        text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
+        await query.edit_message_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
+        context.chat_data.clear()
+        return
+
+    if not obj_map:
+        await query.edit_message_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
+        context.chat_data.clear()
+        return
+
+    context.chat_data["obj_map"] = obj_map
+    context.chat_data["code_shown"] = None
+    old_task = context.chat_data.get("hide_task")
+    if old_task and not old_task.done():
+        old_task.cancel()
+    context.chat_data["hide_task"] = None
+
+    keyboard = build_keyboard(obj_map)
+    await query.edit_message_text("Выберите объект:", reply_markup=keyboard)
 
 async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -356,4 +386,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
