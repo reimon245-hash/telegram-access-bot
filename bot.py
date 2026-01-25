@@ -16,8 +16,8 @@ import gspread
 # === Конфигурация ===
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GOOGLE_CREDENTIALS_JSON = os.getenv("GOOGLE_CREDENTIALS_JSON")
-GOOGLE_SHEET_NAME = "teleg-bot-admin"  # ← НОВОЕ ИМЯ ТАБЛИЦЫ
-WORKSHEET_NAME = "info"                # ← НОВОЕ ИМЯ ЛИСТА
+GOOGLE_SHEET_NAME = "teleg-bot-admin"
+WORKSHEET_NAME = "info"
 
 if not TELEGRAM_TOKEN:
     print("❌ ОШИБКА: TELEGRAM_BOT_TOKEN не установлен!")
@@ -119,43 +119,38 @@ async def show_no_access_message(query_or_msg, user_id):
     else:
         await query_or_msg.reply_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
 
-# === Получение данных из НОВОЙ Google Sheets ===
+# === Получение данных из Google Sheets (без дубликатов) ===
 async def fetch_user_objects(user_id: str):
     try:
         sheet = GoogleSheetsClient().get_worksheet()
-        # Получаем все строки как списки значений
         all_values = sheet.get_all_values()
         if not all_values:
             return None
 
-        headers = all_values[0]  # первая строка — заголовки
-        records = []
-
-        # Находим индексы нужных колонок
+        headers = all_values[0]
         try:
             idx_id = headers.index("ID объекта")
             idx_addr_short = headers.index("Адрес короткий")
+            idx_addr_full = headers.index("Адрес полный")
             idx_code = headers.index("Код от сейфа")
-            idx_features = headers.index("Особенности")
             idx_access = headers.index("ДОСТУП")
             idx_info = headers.index("ИНФОРМАЦИЯ")
         except ValueError as e:
-            logger.error(f"Не найдена колонка в таблице: {e}")
+            logger.error(f"Не найдена обязательная колонка: {e}")
             return None
 
-        # Обрабатываем строки данных
+        records = []
         for row in all_values[1:]:
             record = {
                 "ID объекта": row[idx_id] if idx_id < len(row) else "",
                 "Адрес короткий": row[idx_addr_short] if idx_addr_short < len(row) else "",
+                "Адрес полный": row[idx_addr_full] if idx_addr_full < len(row) else "",
                 "Код от сейфа": row[idx_code] if idx_code < len(row) else "",
-                "Особенности": row[idx_features] if idx_features < len(row) else "",
                 "ДОСТУП": row[idx_access] if idx_access < len(row) else "",
                 "ИНФОРМАЦИЯ": row[idx_info] if idx_info < len(row) else "",
             }
             records.append(record)
 
-        # Ищем запись с доступом
         user_record = None
         for r in records:
             access_field = str(r.get("ДОСТУП", "")).strip()
@@ -180,12 +175,12 @@ async def fetch_user_objects(user_id: str):
                 obj_id = int(raw_id)
                 if obj_id in target_ids:
                     address_short = r.get("Адрес короткий") or "Не указан"
+                    address_full = r.get("Адрес полный") or "Полный адрес не указан"
                     code = r.get("Код от сейфа") or "Не указан"
-                    details = str(r.get("Особенности", "")).strip() or "Особенности отсутствуют"
                     obj_map[obj_id] = {
                         "address_short": str(address_short),
+                        "address_full": str(address_full),
                         "code": str(code),
-                        "details": details
                     }
             except (ValueError, TypeError, AttributeError):
                 continue
@@ -240,7 +235,6 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = build_keyboard(obj_map)
     await update.message.reply_text("Выберите объект:", reply_markup=keyboard)
 
-
 async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -270,34 +264,6 @@ async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = build_keyboard(obj_map)
     await query.edit_message_text("Выберите объект:", reply_markup=keyboard)
 
-async def refresh_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user = query.from_user
-    logger.info(f"🔄 Пользователь {user.id} нажал «ОБНОВИТЬ»")
-
-    obj_map = await fetch_user_objects(str(user.id))
-
-    if obj_map is None:
-        await show_no_access_message(query, user.id)
-        context.chat_data.clear()
-        return
-
-    if not obj_map:
-        await query.edit_message_text("📭 Нет доступных объектов.", reply_markup=build_no_access_keyboard())
-        context.chat_data.clear()
-        return
-
-    context.chat_data["obj_map"] = obj_map
-    context.chat_data["code_shown"] = None
-    old_task = context.chat_data.get("hide_task")
-    if old_task and not old_task.done():
-        old_task.cancel()
-    context.chat_data["hide_task"] = None
-
-    keyboard = build_keyboard(obj_map)
-    await query.edit_message_text("Выберите объект:", reply_markup=keyboard)
-
 async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
@@ -306,7 +272,8 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     obj_map = await fetch_user_objects(user_id)
     if obj_map is None:
-        await show_no_access_message(query, user_id)
+        text = f"Ваш телеграм ID — <code>{user.id}</code>. Передайте его Роману."
+        await query.edit_message_text(text, reply_markup=build_no_access_keyboard(), parse_mode="HTML")
         context.chat_data.clear()
         return
 
@@ -349,10 +316,10 @@ async def show_code_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
         context.chat_data["hide_task"] = task
         context.chat_data["code_shown"] = obj_id
 
-        details = obj_map[obj_id]["details"]
+        address_full = obj_map[obj_id]["address_full"]
         keyboard = build_keyboard(obj_map, code_shown_obj_id=obj_id)
         await query.edit_message_text(
-            text=f"Выберите объект:\n\n📍 <b>Особенности:</b> {details}",
+            text=f"Выберите объект:\n\n📍 <b>Адрес:</b> {address_full}",
             reply_markup=keyboard,
             parse_mode="HTML"
         )
@@ -386,5 +353,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
